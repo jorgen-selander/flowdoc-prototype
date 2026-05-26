@@ -18,6 +18,7 @@ export class AudioRecorder {
   private startedAtMs = 0;
   private stoppedAtMs = 0;
   private exited: Promise<void> | null = null;
+  private intentionalStop = false;
 
   constructor(opts: AudioRecorderOptions) {
     this.outputDir = opts.outputDir;
@@ -57,6 +58,12 @@ export class AudioRecorder {
 
     this.exited = new Promise<void>((resolve, reject) => {
       this.proc!.once("exit", (code, signal) => {
+        // If we asked ffmpeg to stop, any exit is "success" — ffmpeg's SIGINT handler
+        // writes the trailer and calls exit(255), which would otherwise look like an error.
+        if (this.intentionalStop) {
+          resolve();
+          return;
+        }
         if (code !== 0 && signal !== "SIGINT" && signal !== "SIGTERM") {
           reject(new Error(`ffmpeg exited with code ${code}\n${stderrTail}`));
         } else {
@@ -70,21 +77,31 @@ export class AudioRecorder {
   async stop(): Promise<void> {
     if (!this.proc || this.proc.exitCode !== null) return;
     this.stoppedAtMs = Date.now();
+    this.intentionalStop = true;
+
+    // ffmpeg responds reliably to SIGINT (writes the WebM trailer, exits cleanly).
+    // The 'q\n' over stdin only works when stdin is a TTY — when spawned with a piped
+    // stdin (which is always our case), ffmpeg often ignores stdin commands.
     try {
-      this.proc.stdin?.write("q\n");
-      this.proc.stdin?.end();
+      this.proc.kill("SIGINT");
     } catch {
       // ignore
     }
+
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<void>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("ffmpeg stop timeout after 5s")), 5000);
+    });
     try {
-      await Promise.race([
-        this.exited,
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("ffmpeg stop timeout")), 5000),
-        ),
-      ]);
+      await Promise.race([this.exited, timeout]);
+      if (timer) clearTimeout(timer);
     } catch (err) {
-      this.proc.kill("SIGKILL");
+      if (timer) clearTimeout(timer);
+      try {
+        this.proc.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
       throw err;
     }
   }

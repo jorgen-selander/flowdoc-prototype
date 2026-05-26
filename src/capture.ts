@@ -54,73 +54,138 @@ export async function capture(options: CaptureOptions): Promise<void> {
 
   async function shutdown() {
     if (isShuttingDown) {
-      console.log("\nForce exiting...");
-      process.exit(1);
+      try {
+        console.log("\n(Shutdown already in progress; ignoring duplicate stop request.)");
+      } catch {
+        // stdout may be EPIPE if parent died; ignore
+      }
+      return;
     }
     isShuttingDown = true;
-    console.log("\n\nStopping recording...");
+    try {
+      await runShutdown();
+    } catch (err) {
+      try {
+        console.error(`\n  ⚠ Shutdown error: ${(err as Error).message}`);
+      } catch {
+        // ignore
+      }
+    } finally {
+      // No matter what went wrong above, always exit cleanly so the orchestrator sees a clean done.
+      process.exit(0);
+    }
+  }
+
+  async function runShutdown() {
+    safeLog("\n\nStopping recording...");
     recorder.stop();
-    await recorder.waitForPending();
+
+    // Brief wait for any in-flight screenshot so the last step lands in rawSteps.
+    await withTimeout(recorder.waitForPending(), 4000, "pending screenshots").catch((err) => {
+      safeWarn(`  ⚠ ${err.message} — proceeding with what we have.`);
+    });
+
+    // PERSIST RAW STEPS FIRST. Everything below this is best-effort; if anything fails or the
+    // parent process kills us, the captured workflow is already on disk.
+    const rawSteps = recorder.getSteps();
+    let workflowSteps: ReturnType<typeof postprocess> = [];
+    if (rawSteps.length > 0) {
+      workflowSteps = postprocess(rawSteps);
+      try {
+        await fs.promises.writeFile(
+          path.join(flowDir, "workflow-steps.json"),
+          JSON.stringify(workflowSteps, null, 2),
+        );
+        safeLog(`Saved workflow-steps.json (${workflowSteps.length} steps).`);
+      } catch (err) {
+        safeWarn(`  ⚠ failed to write workflow-steps.json: ${(err as Error).message}`);
+      }
+    }
 
     if (audioRecorder) {
+      safeLog("Finalizing audio…");
       try {
         await audioRecorder.stop();
       } catch (err) {
-        console.warn(`  ⚠ ffmpeg stop error: ${(err as Error).message}`);
+        safeWarn(`  ⚠ ffmpeg stop error: ${(err as Error).message}`);
       }
     }
 
-    const rawSteps = recorder.getSteps();
     if (rawSteps.length > 0) {
-      console.log("Processing captured steps...");
-      const workflowSteps = postprocess(rawSteps);
-
       if (audioRecorder && audioRecorder.hasRecording()) {
-        console.log("Slicing audio into per-step segments...");
-        await attachNarration(workflowSteps, audioRecorder);
+        safeLog("Slicing audio into per-step segments…");
+        try {
+          await withTimeout(attachNarration(workflowSteps, audioRecorder), 20000, "audio slicing");
+          // Re-save with narration attached.
+          await fs.promises.writeFile(
+            path.join(flowDir, "workflow-steps.json"),
+            JSON.stringify(workflowSteps, null, 2),
+          );
+        } catch (err) {
+          safeWarn(`  ⚠ ${(err as Error).message} — continuing without per-step audio.`);
+        }
       }
 
       const stepCount = workflowSteps.filter((s) => s.rawSteps[0].action !== "start").length;
-      console.log(`Generating documentation (${stepCount} workflow steps from ${rawSteps.length} raw events)...`);
+      safeLog(`Generating documentation (${stepCount} workflow steps from ${rawSteps.length} raw events)…`);
 
-      const readmePath = await generateMarkdown({
-        name,
-        startUrl: url,
-        steps: workflowSteps,
-        outputDir: flowDir,
-      });
-      await generateMermaid({ steps: workflowSteps, outputDir: flowDir });
-      await generateNotes({ name, steps: workflowSteps, outputDir: flowDir });
-      const sitePath = await generateSite({ name, startUrl: url, steps: workflowSteps, outputDir: flowDir });
-
-      await fs.promises.writeFile(
-        path.join(flowDir, "workflow-steps.json"),
-        JSON.stringify(workflowSteps, null, 2)
-      );
+      let readmePath = "";
+      let sitePath = "";
+      try {
+        readmePath = await generateMarkdown({ name, startUrl: url, steps: workflowSteps, outputDir: flowDir });
+        await generateMermaid({ steps: workflowSteps, outputDir: flowDir });
+        await generateNotes({ name, steps: workflowSteps, outputDir: flowDir });
+        sitePath = await generateSite({ name, startUrl: url, steps: workflowSteps, outputDir: flowDir });
+      } catch (err) {
+        safeWarn(`  ⚠ Generator error: ${(err as Error).message}`);
+      }
 
       if (debug) {
-        await fs.promises.writeFile(
-          path.join(flowDir, "raw-events.json"),
-          JSON.stringify(rawSteps, null, 2)
-        );
-        console.log("Debug file written: raw-events.json");
+        try {
+          await fs.promises.writeFile(
+            path.join(flowDir, "raw-events.json"),
+            JSON.stringify(rawSteps, null, 2),
+          );
+          safeLog("Debug file written: raw-events.json");
+        } catch (err) {
+          safeWarn(`  ⚠ failed to write raw-events.json: ${(err as Error).message}`);
+        }
       }
 
-      console.log(`\nDone! ${stepCount} workflow steps captured.`);
-      console.log(`Documentation:  ${readmePath}`);
-      console.log(`Site:           ${sitePath}`);
-      console.log(`Flowchart:      ${path.join(flowDir, "flow.mmd")}`);
-      console.log(`Notes template: ${path.join(flowDir, "notes-template.md")}`);
-      console.log(`Screenshots:    ${path.join(flowDir, "screenshots")}/`);
+      safeLog(`\nDone! ${stepCount} workflow steps captured.`);
+      if (readmePath) safeLog(`Documentation:  ${readmePath}`);
+      if (sitePath) safeLog(`Site:           ${sitePath}`);
+      safeLog(`Flowchart:      ${path.join(flowDir, "flow.mmd")}`);
+      safeLog(`Notes template: ${path.join(flowDir, "notes-template.md")}`);
+      safeLog(`Screenshots:    ${path.join(flowDir, "screenshots")}/`);
       if (audioRecorder && audioRecorder.hasRecording()) {
-        console.log(`Audio:          ${path.join(flowDir, "audio")}/`);
+        safeLog(`Audio:          ${path.join(flowDir, "audio")}/`);
       }
     } else {
-      console.log("No steps were recorded.");
+      safeLog("No steps were recorded.");
     }
 
-    await browser.close().catch(() => {});
-    process.exit(0);
+    safeLog("Closing browser…");
+    await withTimeout(browser.close(), 3000, "browser close").catch((err) => {
+      safeWarn(`  ⚠ ${err.message}`);
+    });
+  }
+
+  function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      p.then(
+        (val) => { clearTimeout(timer); resolve(val); },
+        (err) => { clearTimeout(timer); reject(err); },
+      );
+    });
+  }
+
+  function safeLog(msg: string): void {
+    try { console.log(msg); } catch { /* EPIPE etc. */ }
+  }
+  function safeWarn(msg: string): void {
+    try { console.warn(msg); } catch { /* EPIPE etc. */ }
   }
 
   process.on("SIGINT", shutdown);

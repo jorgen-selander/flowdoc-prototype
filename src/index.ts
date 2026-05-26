@@ -9,6 +9,7 @@ import { layoutGraph, mergeGraphs, stepsToGraph } from "./graph";
 import { transcribeFlow } from "./transcribe";
 import { generateSite } from "./site";
 import { runDoctor } from "./doctor";
+import { runUi } from "./ui-server";
 import { WorkflowStep } from "./types";
 
 function collect(value: string, prev: string[]): string[] {
@@ -143,6 +144,14 @@ program
     const repoRoot = path.resolve(__dirname, "..");
     const code = await runDoctor(repoRoot);
     process.exit(code);
+  });
+
+program
+  .command("ui")
+  .description("Open a minimal local web UI to trigger FlowDoc commands")
+  .action(async () => {
+    const repoRoot = path.resolve(__dirname, "..");
+    await runUi(repoRoot);
   });
 
 program.parse();
