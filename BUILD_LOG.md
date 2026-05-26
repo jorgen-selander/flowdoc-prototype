@@ -278,6 +278,61 @@ Implementation:
 
 ---
 
+## Session 9: Mic detection (v0.6a fix-up)
+
+**Time:** ~09:50
+**Duration:** ~25 min
+**Commits:** `2016d07` — Auto-detect macOS default mic + add `--mic` override; `820ca24` — Document mic auto-detect
+
+First narrated capture on real hardware sounded clearly choppy and distorted. Listening more carefully, the audio was glitchy in a way that QuickTime recording from the same machine wasn't. The first hypothesis was a sample-rate issue (16 kHz vs the mic's native 48 kHz) plus a too-small ffmpeg thread queue. Bumped to 48 kHz, added `-thread_queue_size 4096`, switched Opus to `voip` mode at 96 kbps. Still choppy.
+
+### The real cause
+
+Asked the user to run `ffmpeg -f avfoundation -list_devices true -i ""`. The list was revealing:
+
+```
+[0] Jörgen's iPhone Microphone
+[1] Microsoft Teams Audio
+[2] Yeti Stereo Microphone
+[3] MacBook Pro Microphone
+[4] External Microphone
+[5] Fargo
+[6] Display Audio
+```
+
+My ffmpeg command used `-i :0`, which in avfoundation's `video_index:audio_index` syntax means "audio device index 0" — the **iPhone Microphone** over Continuity. That's a wireless mic with all the latency and packet-loss issues you'd expect. The user's actual default input (set in System Settings) was *Fargo*, an audio interface at index 5.
+
+So the chop wasn't a buffer or sample-rate problem at all — it was that we were recording from the wrong device entirely. `:0` is a footgun on any multi-mic Mac.
+
+### Fix: detect the system default automatically
+
+`system_profiler SPAudioDataType` (plain-text output) lists each audio device and marks the one with `Default Input Device: Yes`. Parsed that, then matched the device name (case-insensitive, with substring tolerance for differences like `"Jörgen's iPhone"` vs the avfoundation rendering) against the avfoundation device list to get its index. Wired that into the ffmpeg command instead of the hardcoded `:0`.
+
+Also added a `--mic <name-or-index>` override: numeric index for precision, or a case-insensitive substring (`--mic Yeti`) for convenience. Validation against the device list, with the available devices listed in the error message when nothing matches.
+
+Heuristic fallback if `system_profiler` parsing fails: prefer `MacBook Pro Microphone` / `MacBook Air Microphone` / `Built-in Microphone` over device 0. Only falls through to `:0` as last resort with a warning.
+
+### Verification
+
+Hooked the new functions up and tested with a tiny `node -e` self-test against the live system, before re-recording:
+
+```
+--- system default input ---
+  Fargo
+--- resolved (no override) ---
+  5 · Fargo
+```
+
+Then a full capture run with audio on. User confirmed it sounded clean.
+
+### What surprised me
+
+- The "audio is choppy" symptom looked like a buffer / sample-rate problem (the standard avfoundation chop pattern), and my first round of fixes targeted exactly that. They were *correct fixes for a real but different problem* — necessary later, but not the actual cause.
+- The simplest diagnostic — "show me what devices avfoundation actually sees" — would have led to the answer in 30 seconds. Worth reaching for hardware listings earlier when symptoms involve hardware.
+- `system_profiler` plain-text output is awful to parse but stable and dependency-free. The `-json` variant is structurally easier but turned out to be inconsistent across macOS versions, and the text format hasn't changed in years.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -292,8 +347,9 @@ Implementation:
 | — | `ba8cf77` | Defensive `.gitignore` for secrets |
 | v0.5 | `0ae6b4c` | Branching — graph model, `--branch` flag, shared-prefix detection, Y-fork layout |
 | v0.6a | `e981446` | Live audio narration during capture (ffmpeg + per-step slicing) |
+| v0.6a.1 | `2016d07` | Auto-detect macOS default mic, `--mic` override, 48 kHz / voip Opus tuning |
 
-**Total time:** ~4 hours from empty repo to a tool that captures narrated workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
+**Total time:** ~4.5 hours from empty repo to a tool that captures narrated workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
