@@ -15,10 +15,11 @@ Playwright will auto-install Chromium via the `postinstall` script.
 
 ## Usage
 
-FlowDoc has three subcommands:
+FlowDoc has four subcommands:
 
 - `flowdoc capture` — record a browser workflow (with optional voice narration) into a local folder
 - `flowdoc transcribe` — transcribe per-step audio to text using KBLab whisper (Swedish, local)
+- `flowdoc site` — (re)generate a self-contained HTML documentation site for a flow
 - `flowdoc miro` — push a captured flow to a Miro board
 
 ### `flowdoc capture`
@@ -65,6 +66,7 @@ For a flow named `my-flow`, output lands in `flowdocs/my-flow/`:
 ```
 flowdocs/my-flow/
   README.md            # Step-by-step documentation with screenshots + audio links
+  index.html           # Self-contained HTML site (TOC sidebar, inline audio playback, lightbox screenshots)
   flow.mmd             # Mermaid flowchart of page navigations
   notes-template.md    # Per-step notes template for manual annotation
   workflow-steps.json  # Processed steps (consumed by `flowdoc miro`)
@@ -102,6 +104,27 @@ The first transcription downloads the KBLab model (~3 GB) into `~/.cache/hugging
 - **Idempotent.** Each successful transcription stores the audio file's `<mtime>:<size>` in `narration.audioMtime`. On re-run, steps whose fingerprint matches are skipped. Re-record one step in a fresh capture run → only that one re-transcribes.
 - Regenerates `README.md` with the transcripts as blockquotes above the 🎧 audio links.
 - The next `flowdoc miro` run automatically surfaces each transcript as a second italic line under the shape title on the board.
+
+### `flowdoc site`
+
+(Re)generate a self-contained HTML documentation site for an existing flow folder. The site is also auto-emitted by `flowdoc capture` and re-emitted by `flowdoc transcribe`, so you usually don't need to run this directly — only when you want to regenerate without re-capturing or re-transcribing.
+
+```bash
+npx flowdoc site flowdocs/<flow-name>
+open flowdocs/<flow-name>/index.html
+```
+
+| Argument | Description |
+|---|---|
+| `<flow-folder>` | Path to a captured flow folder containing `workflow-steps.json` |
+
+What the site has:
+
+- Two-column layout with a sticky TOC sidebar on the left (scroll-spy highlights the current step as you scroll).
+- One section per step: number badge → title → action line → transcript blockquote (if transcribed) → inline `<audio controls>` (plays directly in the page) → clickable screenshot.
+- Click any screenshot to open a fullscreen lightbox; Esc or click outside closes it.
+- Dark mode kicks in automatically when the OS is set to dark (no toggle).
+- Everything inline — single HTML file, no external CSS/JS. The flow folder is portable: zip and send.
 
 ### `flowdoc miro`
 

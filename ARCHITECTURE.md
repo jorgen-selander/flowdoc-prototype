@@ -68,6 +68,19 @@ Four files come out of `flowdocs/<name>/`:
 - `notes-template.md` — `src/notes.ts`. Empty per-step sections for human annotation.
 - `workflow-steps.json` — the processed steps verbatim. This is the *machine-readable* artifact that `flowdoc miro` reads.
 
+## The HTML documentation site (`src/site.ts`)
+
+The README.md is great for git diffs and for code reviewers, but for *consuming* a narrated flow it has two problems: the audio is hidden behind a 🎧 link instead of being directly playable, and the screenshots are inline at full size with no zoom. The HTML site fixes both.
+
+`src/site.ts` generates a single self-contained `index.html` per flow folder. Layout: sticky TOC sidebar on the left, step sections on the right. Each step shows the title, the action line, the transcript blockquote (if transcribed), an `<audio controls>` element that plays inline, and the screenshot. Clicking a screenshot opens a fullscreen lightbox; the TOC highlights the current step as you scroll (one `IntersectionObserver`, no library).
+
+Design choices worth flagging:
+
+- **Single file, everything inline.** No external CSS, no external JS, no `node_modules`. The site is just the HTML file plus the existing `screenshots/` and `audio/` folders, all relative paths. Zip the flow folder and the documentation works anywhere.
+- **No build step.** Plain string templates in Node. Adding React or a static-site generator would buy nothing here and balloon the dependency footprint.
+- **Dark mode via `prefers-color-scheme`.** No toggle, no JS to manage state — CSS custom properties switch automatically with the OS.
+- **Auto-regenerated.** Both `flowdoc capture` and `flowdoc transcribe` call `generateSite()` at the end, so the site is always fresh. `flowdoc site <folder>` exists for explicit regen.
+
 ## Transcription (`src/transcribe.ts` + `scripts/transcribe.py`)
 
 `flowdoc transcribe <flow-folder>` walks each step's `narration.audioPath` and writes a Swedish text transcript into `narration.transcript`. Everything runs locally — no audio leaves the machine.
@@ -117,6 +130,7 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | `scripts/transcribe.py` | Long-lived Python worker that loads the whisper model and reads/writes JSON lines |
 | `src/postprocess.ts` | 4-pass pipeline: `RecordedStep[]` → `WorkflowStep[]` |
 | `src/markdown.ts` | Renders `README.md` from steps (including 🎧 audio links when narration is present) |
+| `src/site.ts` | Renders the self-contained `index.html` documentation site (TOC, inline audio, lightbox) |
 | `src/mermaid.ts` | Renders `flow.mmd` flowchart |
 | `src/notes.ts` | Renders `notes-template.md` |
 | `src/graph.ts` | `WorkflowStep[]` → `WorkflowGraph`, branch merging, layout |

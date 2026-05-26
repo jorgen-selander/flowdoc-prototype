@@ -379,6 +379,47 @@ Nine fluid Swedish sentences from a single demo capture. KBLab's Swedish-tuned w
 
 ---
 
+## Session 11: HTML documentation site (v0.7)
+
+**Time:** ~11:15
+**Duration:** ~30 min
+**Commit:** `78ef24a` — Add static HTML documentation site generator
+
+After Phase 2 landed, the README.md had everything — transcripts, screenshots, audio links — but consumption was awkward. The 🎧 audio "link" was just a file URL; clicking it in GitHub did nothing useful, and even in a local markdown viewer it didn't play inline. Screenshots were full-size in the page with no zoom. The doc was complete but not enjoyable to read.
+
+User asked between three directions: easier setup for others, an HTML site for the docs, or something else. Picked the HTML site, with the reasoning that audio is now a first-class artifact and a markdown file hides it.
+
+### Design choices
+
+Wanted a single self-contained file. No npm bundle, no React, no static-site generator. Plain string templates in `src/site.ts` (~280 lines) generating one `index.html` per flow.
+
+The non-obvious choices:
+
+- **`<audio controls>` inline per step.** The browser handles playback natively — no JS library, no custom controls. Just point `src=` at the relative `audio/step-NNN.webm` path. Works offline.
+- **TOC scroll-spy via `IntersectionObserver`.** One observer, configured with a `rootMargin` that treats "current step" as the section in the middle-third of the viewport. ~15 lines of vanilla JS, no library.
+- **Lightbox without a library.** Click any `<img.screenshot>` → set `src` on a hidden full-screen overlay div and toggle `.open`. Esc and click-outside both close. ~10 lines of JS.
+- **Dark mode via `prefers-color-scheme`.** All colors come from CSS custom properties; the `@media (prefers-color-scheme: dark)` block redefines them. Zero JS, zero toggle UI, follows the OS.
+- **Auto-emit from capture and transcribe.** Same pattern as markdown/mermaid/notes — both commands call `generateSite()` at the end. `flowdoc site <folder>` is the manual regen escape hatch.
+
+### Wiring
+
+- New `src/site.ts` — `generateSite({ name, startUrl, steps, outputDir })` returns the written file path, mirroring the existing generator signatures.
+- `src/capture.ts` — call it after the markdown/mermaid/notes generators.
+- `src/transcribe.ts` — call it after `generateMarkdown` so transcripts and site updates land together.
+- `src/index.ts` — new `flowdoc site <flow-folder>` subcommand for explicit regen.
+
+### Live test
+
+Ran `node dist/index.js site flowdocs/audio-test4` against the already-transcribed flow from Session 10. Site opened in the default browser showing the 9-step flow with sticky TOC, working inline audio playback, Swedish transcript blockquotes, and lightbox-zoomable screenshots. Dark mode picked up the OS setting correctly.
+
+### What surprised me
+
+- The vanilla-HTML approach was much smaller than I expected. ~280 lines including CSS, JS, and the templating. Would have been a 1000-line React app with a build step. The decision to avoid frameworks here was clearly right.
+- `prefers-color-scheme` with CSS custom properties is the cleanest dark-mode story I've used. Two `--var` definitions and the whole page switches.
+- `IntersectionObserver` for scroll-spy beats the old `scroll` listener + `getBoundingClientRect` approach by a mile — declarative, debounce-free, and you can tune the trigger zone with `rootMargin`.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -395,8 +436,9 @@ Nine fluid Swedish sentences from a single demo capture. KBLab's Swedish-tuned w
 | v0.6a | `e981446` | Live audio narration during capture (ffmpeg + per-step slicing) |
 | v0.6a.1 | `2016d07` | Auto-detect macOS default mic, `--mic` override, 48 kHz / voip Opus tuning |
 | v0.6b | `f2052a8` | Local Swedish whisper transcription via KBLab + Python subprocess |
+| v0.7 | `78ef24a` | Static HTML documentation site (`flowdoc site`, auto-emitted by capture + transcribe) |
 
-**Total time:** ~5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, and publishes the result as a Miro board with native shapes, branches, and per-step Swedish narration.
+**Total time:** ~5.5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, and publishes the result as both a Miro board with native editable shapes AND a self-contained HTML site with inline audio playback.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
