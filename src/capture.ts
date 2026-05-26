@@ -55,16 +55,17 @@ export async function capture(options: CaptureOptions): Promise<void> {
       await generateMermaid({ steps: workflowSteps, outputDir: flowDir });
       await generateNotes({ name, steps: workflowSteps, outputDir: flowDir });
 
+      await fs.promises.writeFile(
+        path.join(flowDir, "workflow-steps.json"),
+        JSON.stringify(workflowSteps, null, 2)
+      );
+
       if (debug) {
         await fs.promises.writeFile(
           path.join(flowDir, "raw-events.json"),
           JSON.stringify(rawSteps, null, 2)
         );
-        await fs.promises.writeFile(
-          path.join(flowDir, "workflow-steps.json"),
-          JSON.stringify(workflowSteps, null, 2)
-        );
-        console.log("Debug files written: raw-events.json, workflow-steps.json");
+        console.log("Debug file written: raw-events.json");
       }
 
       console.log(`\nDone! ${stepCount} workflow steps captured.`);
