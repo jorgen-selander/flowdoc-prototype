@@ -43,3 +43,27 @@ export interface BrowserEvent {
   url: string;
   timestamp: number;
 }
+
+export interface WorkflowNode {
+  id: string;
+  title: string;
+  url: string;
+  isStart: boolean;
+  actionType: ActionType;
+  sourceFlow: string;
+  sourceStepIndex: number;
+  x?: number;
+  y?: number;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}

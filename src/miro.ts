@@ -1,55 +1,59 @@
-import { WorkflowStep } from "./types";
+import { WorkflowGraph, WorkflowNode } from "./types";
 
 interface MiroOptions {
-  steps: WorkflowStep[];
+  graph: WorkflowGraph;
   boardId: string;
   accessToken: string;
-}
-
-interface CreatedShape {
-  id: string;
-  stepIndex: number;
 }
 
 const MIRO_API = "https://api.miro.com";
 const SHAPE_WIDTH = 340;
 const SHAPE_HEIGHT = 140;
-const SHAPE_SPACING_X = 450;
 
 export async function generateMiro(options: MiroOptions): Promise<string> {
-  const { steps, boardId, accessToken } = options;
-  const ordered = [...steps].sort((a, b) => a.index - b.index);
+  const { graph, boardId, accessToken } = options;
 
-  if (ordered.length === 0) {
-    console.log("No workflow steps to push.");
+  if (graph.nodes.length === 0) {
+    console.log("No workflow nodes to push.");
     return boardUrl(boardId);
   }
 
-  console.log(`\nCreating ${ordered.length} shape(s) on board ${boardId}...`);
+  console.log(`\nCreating ${graph.nodes.length} shape(s) on board ${boardId}...`);
 
-  const created: CreatedShape[] = [];
-  for (let i = 0; i < ordered.length; i++) {
-    const step = ordered[i];
-    const x = i * SHAPE_SPACING_X;
-    const shape = await createShape(accessToken, boardId, step, i, x, 0);
-    created.push({ id: shape.id, stepIndex: i });
-    console.log(`  [${i}] shape ${shape.id} "${step.title}"`);
+  const miroIdByNodeId = new Map<string, string>();
+  for (const node of graph.nodes) {
+    const x = node.x ?? 0;
+    const y = node.y ?? 0;
+    const shape = await createShape(accessToken, boardId, node, x, y);
+    miroIdByNodeId.set(node.id, shape.id);
+    console.log(`  [${node.id}] shape ${shape.id} "${node.title}"`);
   }
 
-  if (created.length > 1) {
-    console.log(`\nCreating ${created.length - 1} connector(s)...`);
-    for (let i = 0; i < created.length - 1; i++) {
-      const fromId = created[i].id;
-      const toId = created[i + 1].id;
-      const caption = captionFor(ordered[i + 1]);
-      const connector = await createConnector(accessToken, boardId, fromId, toId, caption);
-      const tag = caption ? ` "${caption}"` : "";
-      console.log(`  [${i}→${i + 1}] connector ${connector.id}${tag}`);
+  if (graph.edges.length > 0) {
+    console.log(`\nCreating ${graph.edges.length} connector(s)...`);
+    for (const edge of graph.edges) {
+      const fromMiroId = miroIdByNodeId.get(edge.from);
+      const toMiroId = miroIdByNodeId.get(edge.to);
+      if (!fromMiroId || !toMiroId) {
+        console.warn(`  ⚠ skipping edge ${edge.id}: unresolved node reference`);
+        continue;
+      }
+      const connector = await createConnector(
+        accessToken,
+        boardId,
+        fromMiroId,
+        toMiroId,
+        edge.label,
+      );
+      const tag = edge.label ? ` "${edge.label}"` : "";
+      console.log(`  [${edge.from} → ${edge.to}] connector ${connector.id}${tag}`);
     }
   }
 
   const url = boardUrl(boardId);
-  console.log(`\nDone. ${created.length} shape(s), ${Math.max(0, created.length - 1)} connector(s).`);
+  console.log(
+    `\nDone. ${graph.nodes.length} shape(s), ${graph.edges.length} connector(s).`,
+  );
   console.log(`Board: ${url}`);
   return url;
 }
@@ -95,12 +99,11 @@ async function maybeSleepForRateLimit(headers: Headers): Promise<void> {
 async function createShape(
   token: string,
   boardId: string,
-  step: WorkflowStep,
-  displayIndex: number,
+  node: WorkflowNode,
   x: number,
   y: number,
 ): Promise<{ id: string }> {
-  const body = shapeBody(step, displayIndex, x, y);
+  const body = shapeBody(node, x, y);
   const { data } = await miroFetch<{ id: string }>(
     token,
     "POST",
@@ -127,11 +130,10 @@ async function createConnector(
   return { id: data.id };
 }
 
-function shapeBody(step: WorkflowStep, displayIndex: number, x: number, y: number): object {
-  const isStart = step.rawSteps[0]?.action === "start";
-  const content = isStart
-    ? `<p><strong>Start:</strong> ${escapeHtml(stripStartPrefix(step.title))}</p>`
-    : `<p><strong>${displayIndex}.</strong> ${escapeHtml(step.title)}</p>`;
+function shapeBody(node: WorkflowNode, x: number, y: number): object {
+  const content = node.isStart
+    ? `<p><strong>Start:</strong> ${escapeHtml(stripStartPrefix(node.title))}</p>`
+    : `<p><strong>${node.sourceStepIndex}.</strong> ${escapeHtml(node.title)}</p>`;
 
   return {
     data: {
@@ -141,7 +143,7 @@ function shapeBody(step: WorkflowStep, displayIndex: number, x: number, y: numbe
     style: {
       fillColor: "#ffffff",
       fillOpacity: "1.0",
-      borderColor: isStart ? "#4caf50" : "#2d9bf0",
+      borderColor: node.isStart ? "#4caf50" : "#2d9bf0",
       borderWidth: "4",
       borderOpacity: "1.0",
       borderStyle: "normal",
@@ -175,20 +177,6 @@ function connectorBody(startId: string, endId: string, caption?: string): object
     body.captions = [{ content: escapeHtml(caption) }];
   }
   return body;
-}
-
-function captionFor(step: WorkflowStep): string | undefined {
-  const action = step.rawSteps[0]?.action;
-  switch (action) {
-    case "click":
-      return "click";
-    case "input":
-      return "type";
-    case "navigation":
-      return "navigate";
-    default:
-      return undefined;
-  }
 }
 
 function stripStartPrefix(title: string): string {

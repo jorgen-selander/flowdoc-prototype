@@ -56,21 +56,41 @@ flowdocs/my-flow/
 
 ### `flowdoc miro`
 
-Push a previously captured flow to a Miro board as native rounded-rectangle shapes connected by elbowed arrows. Each step becomes a shape; the start step is highlighted in green.
+Push a previously captured flow to a Miro board as native rounded-rectangle shapes connected by elbowed arrows. Each step becomes a shape; the start step is highlighted in green. Multiple captured flows can be merged into a branched diagram by passing `--branch` one or more times.
 
 ```bash
 export MIRO_ACCESS_TOKEN='<your-miro-token>'
-npx flowdoc miro --from flowdocs/<flow-name> --board "<board-id>"
+npx flowdoc miro --from flowdocs/<main-flow> [--branch flowdocs/<other-flow>]... --board "<board-id>"
 ```
 
 | Option | Required | Description |
 |---|---|---|
-| `--from <flow-folder>` | Yes | Path to a captured flow folder containing `workflow-steps.json` |
+| `--from <flow-folder>` | Yes | Main flow folder containing `workflow-steps.json` |
+| `--branch <flow-folder>` | No | Alternative branch flow folder. Repeatable — pass `--branch` multiple times to add multiple branches. |
 | `--board <board-id>` | Yes | Miro board ID (the part between `/board/` and `/` in the board URL) |
 
 The command also reads `MIRO_ACCESS_TOKEN` from the environment. Generate one in Miro under **Profile → Your apps → Create new app → Install on this team** (developer mode), then copy the token. Treat it like a password — the project's `.gitignore` blocks `.env` files so a local `.env` is a safe place to keep it.
 
 Each run prints the IDs of every created shape and connector and the board URL at the end. Re-running creates a fresh set of shapes; existing items on the board are never touched or deleted.
+
+#### Branching workflows
+
+To document a workflow with two (or more) clickable options at a decision point, capture each path as its own flow — sharing the same starting URL and the same initial actions — then export them together:
+
+```bash
+# Capture path A
+flowdoc capture --url https://app/start --name signup-card
+# (log in → choose plan → click "Card" → fill card → done)
+
+# Capture path B with the same prefix, divergent ending
+flowdoc capture --url https://app/start --name signup-bank
+# (log in → choose plan → click "Bank" → fill account → done)
+
+# Merge and export
+flowdoc miro --from flowdocs/signup-card --branch flowdocs/signup-bank --board "<board-id>"
+```
+
+The exporter walks both flows in parallel from step 0 and shares any prefix steps that match on `url + selector + action type`. At the first divergent step, it forks: the main path stays on the centre lane (y = 0), branches stack outward at y = ±260, ±520, etc. Branches do not re-converge in this version — each branch ends independently. If a branch shares no prefix with the main flow, is fully contained in it, or is empty, a warning is logged and the branch is skipped.
 
 ## How it works
 
@@ -81,7 +101,7 @@ Each run prints the IDs of every created shape and connector and the board URL a
   3. Generate human-readable step titles
   4. Re-index steps
 - **Generation** — Processed steps are rendered into Markdown, Mermaid, a notes template, and `workflow-steps.json` (the source of truth for the Miro export).
-- **Miro export** — `workflow-steps.json` is read and pushed to Miro's REST v2 API as rounded-rectangle shapes plus elbowed connectors, sequenced sequentially with a soft rate-limit cushion.
+- **Miro export** — `workflow-steps.json` (and any branch flows) are converted to a graph (`WorkflowNode` + `WorkflowEdge`), prefix-merged when branches are supplied, laid out with depth → x and lane → y, and pushed to Miro's REST v2 API as rounded-rectangle shapes plus elbowed connectors, sequenced sequentially with a soft rate-limit cushion.
 
 ## License
 

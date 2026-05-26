@@ -26,9 +26,10 @@ src/
   markdown.ts     — Generates per-flow README.md with screenshots
   mermaid.ts      — Generates flow.mmd flowchart
   notes.ts        — Generates notes-template.md
-  miro.ts         — Pushes a flow to Miro as native shapes + connectors via REST v2
+  graph.ts        — WorkflowStep[] → WorkflowGraph conversion, branch merging (shared-prefix), layout
+  miro.ts         — Pushes a WorkflowGraph to Miro as native shapes + connectors via REST v2
   screenshot.ts   — Screenshot helpers (ensureDir, takeScreenshot)
-  types.ts        — Shared interfaces (CaptureOptions, RecordedStep, WorkflowStep, BrowserEvent)
+  types.ts        — Shared interfaces (CaptureOptions, RecordedStep, WorkflowStep, BrowserEvent, WorkflowNode, WorkflowEdge, WorkflowGraph)
 ```
 
 ## Key conventions
@@ -40,4 +41,6 @@ src/
 - Passwords are masked as `********` in recordings
 - Screenshots use `step-NNN.png` naming
 - Miro export reads `MIRO_ACCESS_TOKEN` from env, creates shapes sequentially with a soft rate-limit cushion, never deletes existing board items
+- Miro export operates on `WorkflowGraph`, not `WorkflowStep[]` directly — linear flows are graphs with one path. Branches (via `--branch`) are merged by shared-prefix detection (matching `url + selector + action type`); branches with no shared prefix or fully contained in main are warned and skipped, not fatal
+- Markdown / Mermaid / notes generators remain main-flow-only; branching is a Miro-only concept for now
 - Secrets policy: `.gitignore` blocks `.env`, `*.pem`, `*.key`, `secrets/` — keep tokens out of tracked files

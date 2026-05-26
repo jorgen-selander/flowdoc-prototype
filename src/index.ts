@@ -5,7 +5,22 @@ import * as fs from "fs";
 import * as path from "path";
 import { capture } from "./capture";
 import { generateMiro } from "./miro";
+import { layoutGraph, mergeGraphs, stepsToGraph } from "./graph";
 import { WorkflowStep } from "./types";
+
+function collect(value: string, prev: string[]): string[] {
+  return [...prev, value];
+}
+
+function readSteps(flowFolder: string): WorkflowStep[] {
+  const stepsPath = path.join(flowFolder, "workflow-steps.json");
+  if (!fs.existsSync(stepsPath)) {
+    throw new Error(
+      `${stepsPath} not found. Re-run \`flowdoc capture\` for this flow first.`,
+    );
+  }
+  return JSON.parse(fs.readFileSync(stepsPath, "utf-8")) as WorkflowStep[];
+}
 
 const program = new Command();
 
@@ -32,8 +47,14 @@ program
 
 program
   .command("miro")
-  .description("Push a captured flow to a Miro board as native shapes and connectors")
-  .requiredOption("--from <flow-folder>", "Path to a flow folder containing workflow-steps.json")
+  .description("Push a captured flow to a Miro board, optionally merging branch flows")
+  .requiredOption("--from <flow-folder>", "Main flow folder (contains workflow-steps.json)")
+  .option(
+    "--branch <flow-folder>",
+    "Alternative branch flow folder, repeatable",
+    collect,
+    [],
+  )
   .requiredOption("--board <board-id>", "Miro board ID")
   .action(async (opts) => {
     const token = process.env.MIRO_ACCESS_TOKEN;
@@ -42,24 +63,34 @@ program
       process.exit(1);
     }
 
-    const stepsPath = path.join(opts.from, "workflow-steps.json");
-    if (!fs.existsSync(stepsPath)) {
-      console.error(
-        `Error: ${stepsPath} not found. Re-run \`flowdoc capture\` for this flow first.`,
-      );
-      process.exit(1);
-    }
-
-    let steps: WorkflowStep[];
+    let mainSteps: WorkflowStep[];
     try {
-      steps = JSON.parse(fs.readFileSync(stepsPath, "utf-8")) as WorkflowStep[];
+      mainSteps = readSteps(opts.from);
     } catch (err) {
-      console.error(`Error: failed to parse ${stepsPath}: ${(err as Error).message}`);
+      console.error(`Error: ${(err as Error).message}`);
       process.exit(1);
     }
 
+    const branchFolders = opts.branch as string[];
+    const branches: { name: string; steps: WorkflowStep[] }[] = [];
+    for (let i = 0; i < branchFolders.length; i++) {
+      try {
+        branches.push({
+          name: `branch${i + 1}`,
+          steps: readSteps(branchFolders[i]),
+        });
+      } catch (err) {
+        console.error(`Error reading branch "${branchFolders[i]}": ${(err as Error).message}`);
+        process.exit(1);
+      }
+    }
+
+    const mainGraph = stepsToGraph(mainSteps, "main");
+    const merged = mergeGraphs(mainGraph, mainSteps, branches);
+    const laid = layoutGraph(merged);
+
     try {
-      await generateMiro({ steps, boardId: opts.board, accessToken: token });
+      await generateMiro({ graph: laid, boardId: opts.board, accessToken: token });
     } catch (err) {
       console.error(`\n${(err as Error).message}`);
       process.exit(1);
