@@ -101,16 +101,62 @@ The architecture is a long-lived Python subprocess plus a thin Node wrapper:
 
 `flowdoc miro` reads `workflow-steps.json`, runs it through `src/graph.ts` to convert into a `WorkflowGraph` (nodes + edges), then POSTs to Miro's REST v2 API:
 
-- `POST /v2/boards/{id}/shapes` per node — rounded rectangles with explicit `style` (4px green border for start, blue for others, white fill, 20px Open Sans).
+- `POST /v2/boards/{id}/shapes` per node — Unikum-branded shape per step type (see below).
 - `POST /v2/boards/{id}/connectors` per edge — elbowed lines with `endStrokeCap: arrow`, short captions like `click` / `type` / `navigate`.
 
 Shapes must be created first so each connector can reference the returned Miro IDs. Calls are made sequentially with a soft rate-limit cushion: if `X-RateLimit-Remaining` drops below 10% of `X-RateLimit-Limit`, the next request waits a second before going out.
 
+### Brand styling (Unikum)
+
+`styleFor(node, isFork)` in `src/miro.ts` maps each `WorkflowNode` to a shape + fill + text color, following the Unikum kommunikationsguide:
+
+| Step type | Miro shape | Fill | Text |
+|---|---|---|---|
+| Start step (`node.isStart`) | `circle` (180 × 180) | `#FFDB1C` yellow | dark |
+| Fork point (2+ outgoing edges) | `rhombus` (280 × 200) | `#58B456` green | white |
+| Click that landed on a page (`node.result` set) or pure navigation | `rectangle` (340 × 140) | `#C7DDF4` light blue | dark |
+| Pure user action (click/input without nav) | `round_rectangle` (340 × 140) | `#0C69D2` blue | white |
+
+Fork detection is computed at export time by tallying outgoing-edge counts per node — no schema change required, just a `Map<string, number>`. Borders are transparent (`borderOpacity: 0` with `borderWidth: 2`, because Miro rejects `borderWidth: 0` outright). Each shape's `data.content` is the title plus an optional italic `<p>` line for the transcript when present.
+
 ### Branching
 
-Branching works by capturing two flows that share a starting URL and the first few clicks. `mergeGraphs()` in `src/graph.ts` walks both step arrays in lockstep, comparing `url + selector + action type`, stops at the first mismatch, and forks the branch at that point. `layoutGraph()` then assigns each node a position: depth from the start → x, which flow it belongs to → y (main = 0, branch1 = -260, branch2 = +260, …).
+Branching works by capturing two flows that share a starting URL and the first few clicks. `mergeGraphs()` in `src/graph.ts` walks both step arrays in lockstep, comparing `url + selector + action type`, stops at the first mismatch, and forks the branch at that point. `layoutGraph()` then assigns each node a position: depth from the start → x, which flow it belongs to → y (main = 0, branch1 = -260, branch2 = +260, …). The node where divergence happens automatically becomes a green diamond on the board because it ends up with two outgoing edges (one to the next main step, one to the branch's first divergent step).
 
 Branches end independently in this version — no diamond convergence — and a branch that shares no prefix with main, is fully contained in main, or is empty is warned and skipped rather than fatal.
+
+## The local web UI (`src/ui-server.ts` + `src/ui-page.ts`)
+
+`flowdoc ui` is a thin HTTP+SSE wrapper around the existing CLI subcommands. The goal is discoverability for teammates who'd rather click than memorize flags; under the hood it spawns the same `node dist/index.js <subcommand>` processes the CLI runs.
+
+- **`src/ui-server.ts`** — Node's built-in `http.createServer` binds to `127.0.0.1` on a random free port and prints the URL. Endpoints:
+  - `GET /` → the UI HTML.
+  - `GET /flowdocs/*` → serves files from the flowdocs tree, scoped to that directory; this is how the Site card opens a generated `index.html` directly.
+  - `GET /api/flows` → list of flow folders with `{ name, stepCount, hasAudio, hasTranscripts }`.
+  - `GET /api/mics` → avfoundation devices + the detected system default index.
+  - `GET /api/status` → current session state and a replay of buffered output (refresh-safe).
+  - `POST /api/start` → spawn a subcommand. Rejects 409 if a session is already running.
+  - `POST /api/send-enter` → write `"\n"` to the active subprocess's stdin (capture's two-step start).
+  - `POST /api/stop` → `kill("SIGINT")` to the active child.
+  - `POST /api/miro-token` → in-memory `MIRO_ACCESS_TOKEN` override.
+  - `GET /api/stream` → Server-Sent Events. Replays the session output buffer (cap 5 000 lines), then tails new lines as they arrive. ANSI escape codes are stripped before broadcast so the doctor's colored output doesn't show as raw text.
+- **`src/ui-page.ts`** — a single HTML string (CSS + vanilla JS inline, no framework). One card per subcommand; a sticky log pane on the right; a status pill that ticks elapsed time during a run.
+
+Single-session model — the server tracks at most one `Session` (the active child, its output buffer, started/exited state). New `/api/start` while busy returns 409 and the UI keeps the Run buttons disabled. Capture's two-button dance maps cleanly: Start spawns capture, Start recording POSTs `/api/send-enter`, Stop POSTs `/api/stop`. The Stop button only enables after Start recording has been clicked, so the empty-folder "I forgot to press Enter" trap can't happen.
+
+## Capture shutdown durability
+
+The capture process used to lose work occasionally when shut down: a hung `await` in the cleanup path, an EPIPE from a dead parent, or a duplicate signal could all leave `workflow-steps.json` unwritten. The current shutdown handler (`src/capture.ts`) hardens every path:
+
+1. **`isShuttingDown` flag** — duplicate signals run the handler again but return immediately; no force-exit.
+2. **30 s watchdog** — `setTimeout` with `unref()` calls `process.exit(0)` if anything past this point hangs.
+3. **`safeLog` / `safeWarn`** — wrap `console.log` so EPIPE on a dead parent pipe doesn't throw.
+4. **Save `workflow-steps.json` first** — written immediately after `recorder.waitForPending()` (which has its own 4 s timeout), before any audio or generator work. Raw events survive even if a later phase fails.
+5. **Per-phase timeouts** — `waitForPending` 4 s, audio slicing 20 s, plus `audioRecorder.stop()` has its own 5 s timeout inside `audio.ts`.
+6. **Fire-and-forget `browser.close()`** — Playwright's close sometimes stalls on IPC for opaque reasons; the await was the most common cause of "stuck at Closing browser…". We call it without awaiting; `process.exit(0)` in the outer `finally` kills the Chromium subprocess as a side effect.
+7. **`try / finally` with `process.exit(0)`** — no matter what went wrong, the finally runs and the process exits cleanly.
+
+The result: the UI shows `__DONE__ 0` within milliseconds of the last generator log line, regardless of what Chromium is doing.
 
 ## The Node ↔ browser dance
 
@@ -122,8 +168,10 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 
 | File | Role |
 |---|---|
-| `src/index.ts` | Commander CLI — `capture` and `miro` subcommands |
-| `src/capture.ts` | Launches Playwright, waits for Enter, owns the recorder + audio lifecycle, fires post-processing + generation on Ctrl+C |
+| `src/index.ts` | Commander CLI — `capture` / `transcribe` / `site` / `miro` / `doctor` / `ui` subcommands |
+| `src/capture.ts` | Launches Playwright, waits for Enter, owns the recorder + audio lifecycle, hardened shutdown with watchdog + early JSON save |
+| `src/ui-server.ts` | `flowdoc ui` HTTP server: localhost-only, SSE log stream, /api endpoints for flows/mics/status/control |
+| `src/ui-page.ts` | Single-page UI as one HTML string: card per subcommand, sticky log pane |
 | `src/recorder.ts` | The injected browser script + the Node-side event handler that turns events into `RecordedStep`s |
 | `src/audio.ts` | ffmpeg subprocess wrapper: mic detection, recording, per-step slicing |
 | `src/transcribe.ts` | Python subprocess wrapper for KBLab whisper transcription |

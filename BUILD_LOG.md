@@ -451,6 +451,90 @@ Same review pattern as earlier sessions. ChatGPT agreed the doctor + onboarding 
 
 ---
 
+## Session 13: Local web UI (v0.9)
+
+**Time:** ~13:00
+**Duration:** ~90 min (incl. several debugging detours)
+**Commit:** `20b83fd` — Add `flowdoc ui` — minimal local web UI to trigger commands
+
+After v0.8 made it easy for a teammate to set up the env, the next friction was remembering the CLI flags. Wanted a discoverable surface — one button per subcommand, live log output, no extra abstractions. Spent the session building `flowdoc ui` and chasing a series of capture-shutdown bugs the UI exposed.
+
+### Architecture
+
+Two new files: `src/ui-server.ts` (~280 lines) and `src/ui-page.ts` (~400 lines). The server is Node's built-in `http.createServer` on a random `127.0.0.1` port. Output streams to the browser over Server-Sent Events. POST endpoints handle start / stop / send-enter / token-override. Single-session model — at most one CLI subcommand running at a time. The flowdocs/ tree is served at `/flowdocs/*` so generated `index.html` sites can be opened directly from the Site card.
+
+The capture two-step UX (open browser, press Enter to start recording, Ctrl+C to stop) maps to three buttons. Start is enabled at first; Start recording appears after the subprocess is alive; Stop only enables after the user has clicked Start recording. This last bit was added after a user clicked Stop before pressing Enter and ended up with an empty `flowdocs/<name>/` folder.
+
+### The capture-shutdown saga
+
+The UI exposed several flaky shutdown paths that the terminal-only flow had hidden. Five fixes landed in this session:
+
+1. **`q\n` to ffmpeg stdin doesn't work when stdin is a pipe.** ffmpeg's interactive command processing only triggers on a TTY. In the terminal, Ctrl+C sent SIGINT to the whole process group (ffmpeg included), which is why it always exited cleanly. Through the UI only the capture process gets SIGINT, so ffmpeg sat idle waiting for the q-command it never read. **Fix:** send `SIGINT` directly to ffmpeg in `audio.ts`. ffmpeg's signal handler writes the WebM trailer and exits with 255.
+
+2. **ffmpeg exit 255 was logged as an error.** After fixing #1, every successful audio shutdown surfaced a "⚠ ffmpeg stop error: ffmpeg exited with code 255" warning. **Fix:** added an `intentionalStop` flag on `AudioRecorder` — any exit during an intentional stop resolves cleanly instead of rejecting.
+
+3. **Empty captures left half-created folders.** If a user clicked Stop before pressing Enter, `ensureScreenshotDir` had already created the folder, but `recorder.steps` was empty so no `workflow-steps.json` got written. Transcribe / Miro then errored on missing files. **Fix:** UI disables Stop until Start-recording is clicked; the dropdowns filter out flows with `stepCount === 0`.
+
+4. **A hung Playwright screenshot blocked shutdown.** Mid-flow navigations occasionally left a pending screenshot in-flight. `recorder.waitForPending()` awaited it forever. **Fix:** wrap with a 4 s timeout; "proceeding with what we have" warning if it trips.
+
+5. **`browser.close()` could stall forever.** Even after all the above, occasionally `await browser.close()` never resolved. **Fix:** fire-and-forget the close; `process.exit(0)` kills Chromium as a side effect anyway. Plus a 30 s watchdog `setTimeout` with `unref()` as belt-and-suspenders.
+
+The shutdown handler now writes `workflow-steps.json` *first* (before any audio or generator work), so even when something later fails, the raw events are preserved.
+
+### What surprised me
+
+- The biggest UX win came from disabling the Stop button until recording has begun. One-line change, eliminated an entire category of "I lost my work" reports.
+- Server-Sent Events were the right choice over WebSockets. One-way streaming is exactly what subprocess output is, the browser auto-reconnects, no library needed, and the buffer-replay-on-connect pattern made browser refreshes during a long capture seamless.
+- ANSI escape codes in subprocess stdout looked terrible in the HTML log pane. Stripping them server-side with one regex was a 30-second fix.
+
+---
+
+## Session 14: Unikum brand styling + bulletproof shutdown (v0.10)
+
+**Time:** ~15:30
+**Duration:** ~45 min
+**Commit:** `0a14474` — Unikum-branded Miro shapes + bulletproof capture shutdown
+
+User shared the Unikum kommunikationsguide and the flowchart symbol legend. Wanted the Miro export to match the brand: yellow start circles, blue user-action rectangles, light blue page rectangles, green decision diamonds. No flag — just replace the generic blue-on-white styling.
+
+### The shape mapping
+
+A small `styleFor(node, isFork)` function in `src/miro.ts`:
+
+- `node.isStart` → `circle` (180 × 180), yellow `#FFDB1C`, dark text
+- `isFork` (any node with 2+ outgoing edges) → `rhombus` (280 × 200), green `#58B456`, white text
+- `node.actionType === "navigation"` OR (`node.actionType === "click"` AND `node.result` set) → `rectangle` (340 × 140), light blue `#C7DDF4`, dark text
+- everything else (pure click, input) → `round_rectangle` (340 × 140), blue `#0C69D2`, white text
+
+The fork detection was pleasingly trivial — counting outgoing edges per node:
+
+```ts
+const outgoingByFrom = new Map<string, number>();
+for (const edge of graph.edges) {
+  outgoingByFrom.set(edge.from, (outgoingByFrom.get(edge.from) ?? 0) + 1);
+}
+const isFork = (nodeId: string) => (outgoingByFrom.get(nodeId) ?? 0) > 1;
+```
+
+No schema change required. Branch fork points auto-render as diamonds because `mergeGraphs()` already gives the divergence node two outgoing edges.
+
+### One Miro API gotcha
+
+First push failed with `400 Bad Request: style.borderWidth must be greater than 1.0`. Miro doesn't let you hide a border by setting width to 0. **Fix:** `borderWidth: "2"` with `borderOpacity: "0.0"` — same visual result (no visible border), no API rejection.
+
+### The lingering "Closing browser…" hang
+
+Session 13 ironed out most shutdown paths but one bug survived: occasionally `await browser.close()` never resolved. The user reported it freezing every other capture session. Capture's logs went all the way through "Done! N workflow steps captured." and listed all output files, then stopped at "Closing browser…" for minutes. Eventually the process exited with code 130 (terminated by signal), not a clean `process.exit(0)`.
+
+I never figured out the root cause inside Playwright's IPC. But I didn't need to: the await on `browser.close()` was the load-bearing failure point and the simplest fix was to not await it. `process.exit(0)` kills the Chromium subprocess as a side effect anyway. Added a 30 s watchdog `setTimeout(... , 30000)` with `.unref()` as a final safety net. With those two changes, the UI now sees `__DONE__ 0` within milliseconds of the last generator line.
+
+### What surprised me
+
+- The brand mapping ended up being one helper function and one type-field addition (`result?: string` on `WorkflowNode`). Everything else — fork detection, layout, transcripts as second line — already worked. The right abstraction in v0.5 (graph + layout) made this a one-session change.
+- Fire-and-forget for `browser.close()` felt sloppy at first but it's actually correct: the parent is about to die, the OS will reap children, awaiting it just creates new failure modes. The lesson is that "await everything for cleanliness" isn't always right.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -469,8 +553,10 @@ Same review pattern as earlier sessions. ChatGPT agreed the doctor + onboarding 
 | v0.6b | `f2052a8` | Local Swedish whisper transcription via KBLab + Python subprocess |
 | v0.7 | `78ef24a` | Static HTML documentation site (`flowdoc site`, auto-emitted by capture + transcribe) |
 | v0.8 | `7c15e97` | `flowdoc doctor` + ONBOARDING.md + venv auto-detect for transcribe |
+| v0.9 | `20b83fd` | Local web UI (`flowdoc ui`) — one card per subcommand, live SSE log, two-step capture buttons; plus shutdown fixes for the bugs the UI exposed |
+| v0.10 | `0a14474` | Miro export uses Unikum brand palette + flowchart symbols; capture shutdown watchdog + fire-and-forget `browser.close()` |
 
-**Total time:** ~6 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, publishes the result as both a Miro board with native editable shapes AND a self-contained HTML site with inline audio playback, and has a one-command environment checker for new teammates.
+**Total time:** ~7.5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, publishes the result as a Miro board with brand-correct shapes AND a self-contained HTML site with inline audio playback, all driven by either CLI or a localhost web UI, with a one-command environment checker for new teammates.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture

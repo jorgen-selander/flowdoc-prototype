@@ -17,12 +17,14 @@ Playwright will auto-install Chromium via the `postinstall` script.
 
 ## Usage
 
-FlowDoc has four subcommands:
+FlowDoc has six subcommands:
 
 - `flowdoc capture` — record a browser workflow (with optional voice narration) into a local folder
 - `flowdoc transcribe` — transcribe per-step audio to text using KBLab whisper (Swedish, local)
 - `flowdoc site` — (re)generate a self-contained HTML documentation site for a flow
 - `flowdoc miro` — push a captured flow to a Miro board
+- `flowdoc doctor` — check that the local environment is set up (Node, ffmpeg, Python, venv, etc.)
+- `flowdoc ui` — open a minimal local web UI in the browser to trigger all the commands above
 
 ### `flowdoc capture`
 
@@ -128,9 +130,47 @@ What the site has:
 - Dark mode kicks in automatically when the OS is set to dark (no toggle).
 - Everything inline — single HTML file, no external CSS/JS. The flow folder is portable: zip and send.
 
+### `flowdoc doctor`
+
+Print a status checklist of the local environment — Node, build output, ffmpeg, system mic, Python, virtual env, transformers + torch, Playwright Chromium, MIRO token. Diagnose only — never installs anything. Exit 0 if no failures, 1 otherwise.
+
+```bash
+node dist/index.js doctor
+```
+
+Red rows include the exact command to fix the problem. Recommended first command for any new teammate; see `ONBOARDING.md` for the full setup walkthrough.
+
+### `flowdoc ui`
+
+Open a minimal local web UI in the browser that wraps every other subcommand in a card with the right inputs and a Run button. Live output streams into a log pane via Server-Sent Events.
+
+```bash
+node dist/index.js ui
+```
+
+What you get:
+
+- One card per subcommand (Doctor, Capture, Transcribe, Site, Miro). Inputs map 1:1 to CLI flags.
+- Capture's two-step flow surfaces as two buttons: **Start** opens the browser, **Start recording (Enter)** begins capturing clicks + audio, **Stop & save** finalises and writes files. Stop is disabled until recording has actually begun, so you can't accidentally throw away the session.
+- Mic dropdown auto-populated from your avfoundation devices, with the macOS system default pre-selected.
+- Branch multi-select on the Miro card — Cmd-click to include additional captured flows; each becomes a separate `--branch` argument under the hood.
+- In-memory `MIRO_ACCESS_TOKEN` override field for one-off pushes without exporting the var.
+- `flowdocs/*` is served at `/flowdocs/*` so the generated `index.html` site can be opened directly from the Site card after generation.
+
+Server binds to `127.0.0.1` on a random port. Ctrl+C in the launching terminal stops it.
+
 ### `flowdoc miro`
 
-Push a previously captured flow to a Miro board as native rounded-rectangle shapes connected by elbowed arrows. Each step becomes a shape; the start step is highlighted in green. Multiple captured flows can be merged into a branched diagram by passing `--branch` one or more times.
+Push a previously captured flow to a Miro board as native shapes connected by elbowed arrows, using the Unikum brand palette and flowchart-symbol language:
+
+| Step type | Symbol | Fill |
+|---|---|---|
+| Start | Yellow circle | `#FFDB1C` |
+| Pure user action (click, input) | Blue rounded rectangle | `#0C69D2` |
+| Click that landed on a page / pure navigation | Light blue rectangle | `#C7DDF4` |
+| Fork point (any node with 2+ outgoing edges, auto-detected from `--branch`) | Green diamond | `#58B456` |
+
+Multiple captured flows can be merged into a branched diagram by passing `--branch` one or more times.
 
 ```bash
 export MIRO_ACCESS_TOKEN='<your-miro-token>'

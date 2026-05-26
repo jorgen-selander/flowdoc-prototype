@@ -19,20 +19,22 @@ npm run build    # tsc
 
 ```
 src/
-  index.ts          — CLI entry point (commander setup, `capture` + `transcribe` + `site` + `miro` + `doctor` subcommands)
-  capture.ts        — Main capture loop: launches browser, waits for Enter, runs recorder + audio, triggers generation
+  index.ts          — CLI entry point (commander setup: `capture` / `transcribe` / `site` / `miro` / `doctor` / `ui`)
+  capture.ts        — Main capture loop: launches browser, waits for Enter, runs recorder + audio, triggers generation, 30s shutdown watchdog
   recorder.ts       — Injects JS into pages, listens for click/input/navigation events, takes screenshots
   audio.ts          — ffmpeg subprocess wrapper: records mic to audio/recording.webm, slices into per-step files
   transcribe.ts     — Spawns scripts/transcribe.py (via preferredPython), queues audio paths, writes transcripts into workflow-steps.json
   python.ts         — Shared Python helpers: pickPython, repoPython, preferredPython, hasModule
   doctor.ts         — `flowdoc doctor` checks: Node/build/ffmpeg/mic/Python/venv/transformers/Playwright/MIRO token
+  ui-server.ts      — `flowdoc ui` HTTP server: 127.0.0.1, random port, SSE log stream, /api/{flows,mics,status,start,stop,send-enter,miro-token}, serves /flowdocs/* for site links
+  ui-page.ts        — Single-page UI as one HTML string: one card per subcommand, sticky log pane, EventSource consumer
   postprocess.ts    — 4-pass pipeline: dedup clicks → merge click+nav → generate titles → reindex
   markdown.ts       — Generates per-flow README.md with screenshots + narration audio links / transcripts
   site.ts           — Generates self-contained index.html per flow: TOC sidebar, inline <audio>, lightbox screenshots
   mermaid.ts        — Generates flow.mmd flowchart
   notes.ts          — Generates notes-template.md
   graph.ts          — WorkflowStep[] → WorkflowGraph conversion, branch merging (shared-prefix), layout
-  miro.ts           — Pushes a WorkflowGraph to Miro as native shapes + connectors via REST v2
+  miro.ts           — Pushes a WorkflowGraph to Miro using the Unikum brand palette + flowchart symbols
   screenshot.ts    — Screenshot helpers (ensureDir, takeScreenshot)
   types.ts          — Shared interfaces (CaptureOptions, RecordedStep, WorkflowStep, BrowserEvent, Narration, WorkflowNode, WorkflowEdge, WorkflowGraph)
 scripts/
@@ -60,4 +62,8 @@ requirements.txt    — transformers + torch pins for the Python transcriber
 - Python resolution lives in `src/python.ts`: `preferredPython(repoRoot)` returns `.venv/bin/python` if present, falling back to `python3`/`python` on PATH. Both `flowdoc transcribe` and `flowdoc doctor` use it, so teammates don't need to `source .venv/bin/activate` every session — the venv is auto-detected.
 - Mic selection is automatic: on startup the macOS system-default input is read from `system_profiler SPAudioDataType` and matched against the avfoundation device list parsed from `ffmpeg -list_devices`. Avoids the trap where avfoundation's `:0` syntax silently grabs a Continuity iPhone mic. Override with `--mic <name-or-index>`; numeric index or case-insensitive substring of the avfoundation device name.
 - Encoder settings tuned for voice: 48 kHz mono (matches mic native rate, no real-time resample stutter), Opus in `voip` application mode at 96 kbps, ffmpeg `-thread_queue_size 4096` so the avfoundation input thread isn't starved under Playwright CPU load.
+- ffmpeg is stopped with `kill("SIGINT")`, not `q\n` on stdin — the q-command only works when stdin is a TTY, never the case when ffmpeg is spawned from Node. ffmpeg's own SIGINT handler writes the WebM trailer and exits with 255; `intentionalStop` flag on `AudioRecorder` treats that exit as success rather than a false-alarm error.
+- Miro export uses the Unikum brand palette: yellow circle (`#FFDB1C`) for the start step, blue rounded rectangle (`#0C69D2`) for pure user actions, light blue rectangle (`#C7DDF4`) for steps that landed on a page (`click → result` or pure `navigation`), green diamond (`#58B456`) for any node with 2+ outgoing edges (auto-detected fork point from `--branch` merges). Borders are transparent. Miro requires `borderWidth > 1` so the value is `2` with `borderOpacity 0` instead of `borderWidth 0` (Miro rejects that).
+- Capture shutdown is bulletproof: writes `workflow-steps.json` first before any audio/generator work, wraps each phase in a try/catch + per-phase timeout (4 s pending screenshots, 20 s slicing, 30 s overall watchdog), uses `safeLog`/`safeWarn` so EPIPE on a dead parent pipe doesn't crash the shutdown, `browser.close()` is fire-and-forget (Playwright IPC sometimes stalls; `process.exit(0)` kills Chromium as a side effect anyway).
+- The local web UI (`flowdoc ui`) is a thin HTTP+SSE wrapper that spawns the same CLI subcommands as children. Single-session model (one subcommand at a time). The output buffer is replayed to new SSE clients so a browser refresh during a long capture doesn't lose context. `MIRO_ACCESS_TOKEN` can be overridden from the UI for one-off pushes without exporting the var. Strip ANSI escapes from subprocess stdout/stderr before streaming so colored doctor output reads cleanly in the browser log pane.
 - Secrets policy: `.gitignore` blocks `.env`, `*.pem`, `*.key`, `secrets/` — keep tokens out of tracked files
