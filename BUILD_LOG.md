@@ -176,6 +176,65 @@ Followed up with a `.gitignore` pass to defensively block secrets before any tok
 
 ---
 
+## Session 7: Branching workflows (v0.5)
+
+**Time:** ~08:00
+**Duration:** ~40 min
+**Commit:** `0ae6b4c` — Add branching support to `flowdoc miro` via a graph model
+
+After getting the linear Miro export working, the next natural question came up almost immediately: *"Some times there might be two clickable options I want to get into the same workflow. Is this possible and how to do it?"*
+
+The current data model (`WorkflowStep[]` ordered by index) couldn't represent it — each step had exactly one predecessor and one successor.
+
+### Cross-checking with ChatGPT
+
+User pasted ChatGPT's full architectural proposal: refactor to a `WorkflowGraph` (nodes + edges), make the linear flow just a degenerate case of a graph, and ship in three phases — manual graph file first, then multi-capture merge, then branch-capture-during-recording. The user said *"Only consider what you find relevant, you know the code best."*
+
+Most of ChatGPT's reasoning was correct. Pushed back on three things, knowing the actual codebase:
+
+1. **YAML** for the graph file — there's no YAML parser in the deps. JSON throughout, matches `workflow-steps.json`.
+2. **Manual graph file as the FIRST user-facing step** — the user had already picked "two captures + auto-merge" as their preferred UX. Hand-authoring a graph JSON is friction they didn't ask for. Ship the merge directly; the graph file is internal-only for now.
+3. **"Detect shared URLs/screens and collapse them"** — that's the diamond/suffix case, which the user explicitly deferred. v0.5 is Y-fork only.
+
+Also calibrated the branch lane spacing from ChatGPT's `±200` to `±260` — shape height 140 plus 4px borders needed more breathing room.
+
+### Architecture
+
+Three concepts in `src/graph.ts`:
+
+- `stepsToGraph(steps, flowName)` — wraps a captured flow in a `WorkflowGraph`. Each step becomes a node `${flowName}:${index}`; consecutive pairs become edges labelled with the action type (`click`/`type`/`navigate`).
+- `mergeGraphs(main, mainSteps, branches[])` — for each branch, walks both step arrays in lockstep until `url + selector + action type` stop matching. Drops the branch's duplicate prefix nodes, adds a fork edge from `main:i-1 → branch:i`, appends the rest. Warns and skips for empty branches, identical branches, and branches with no shared prefix.
+- `layoutGraph(graph)` — BFS depth from the start node → `x = depth * 450`. Lane assignment: `main = 0`, branches alternate outward (`branch1 = -260`, `branch2 = +260`, `branch3 = -520`, …).
+
+`src/miro.ts` was rewritten to consume `WorkflowGraph` instead of `WorkflowStep[]`. The HTTP/styling code (rounded rectangles, green-vs-blue borders, elbowed connectors, rate-limit cushion) is untouched — only the iteration loop changed from "for each step" to "for each node, then for each edge". `src/index.ts` got a `collect()` reducer and a repeatable `--branch <folder>` option.
+
+### Verification before the live test
+
+Wrote a small offline self-test using `node -e` to feed synthetic main + branch step arrays through `stepsToGraph → mergeGraphs → layoutGraph` and print the resulting nodes and edges. Confirmed:
+- Linear backward-compat (no branches → identical layout to v0.4).
+- Y-fork at the correct depth, branched lane at y = -260.
+- Three-branch lane assignment (-260, +260, -520).
+- Edge cases warn-and-skip without aborting.
+
+This caught a bug-that-wasn't (the depth assignment was correct on first try) but saved a round-trip to the real Miro API.
+
+### Live test
+
+User captured two flows on the same Unikum demo site sharing a login prefix, then ran:
+
+```
+flowdoc miro --from flowdocs/fork-A --branch flowdocs/fork-B --board "..."
+```
+
+Worked cleanly. *"Great! Update docs, commit and push"*.
+
+### What surprised me
+
+- The `WorkflowGraph` refactor was almost free because the Miro export was already a pure function over an ordered structure. Swapping `WorkflowStep[]` for a graph that exposes `node.x` and `node.y` per node was a couple of method-signature changes; the styling/HTTP code didn't move.
+- The offline self-test via `node -e` was a 5-minute investment that bought certainty before any real API call. For graph-shape logic with multiple edge cases, this was more useful than a unit test framework would have been.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -188,8 +247,9 @@ Followed up with a `.gitignore` pass to defensively block secrets before any tok
 | — | `35f6516` | README and CLAUDE.md |
 | v0.4 | `d2e8fb7` | Miro export — `flowdoc miro` subcommand, always emit `workflow-steps.json` |
 | — | `ba8cf77` | Defensive `.gitignore` for secrets |
+| v0.5 | `0ae6b4c` | Branching — graph model, `--branch` flag, shared-prefix detection, Y-fork layout |
 
-**Total time:** ~2.5 hours from empty repo to a tool that captures workflows AND pushes them to a Miro board as editable native shapes.
+**Total time:** ~3 hours from empty repo to a tool that captures workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
