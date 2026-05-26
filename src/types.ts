@@ -64,6 +64,7 @@ export interface WorkflowNode {
   sourceFlow: string;
   sourceStepIndex: number;
   transcript?: string;
+  result?: string;
   x?: number;
   y?: number;
 }

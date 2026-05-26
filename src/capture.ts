@@ -62,6 +62,19 @@ export async function capture(options: CaptureOptions): Promise<void> {
       return;
     }
     isShuttingDown = true;
+
+    // Watchdog: if anything in runShutdown hangs past 30 s, force-exit. unref() so the
+    // timer doesn't keep the event loop alive on its own.
+    const watchdog = setTimeout(() => {
+      try {
+        console.warn("\n  ⚠ Shutdown watchdog tripped after 30s; force-exiting.");
+      } catch {
+        // ignore
+      }
+      process.exit(0);
+    }, 30000);
+    watchdog.unref();
+
     try {
       await runShutdown();
     } catch (err) {
@@ -71,7 +84,7 @@ export async function capture(options: CaptureOptions): Promise<void> {
         // ignore
       }
     } finally {
-      // No matter what went wrong above, always exit cleanly so the orchestrator sees a clean done.
+      clearTimeout(watchdog);
       process.exit(0);
     }
   }
@@ -166,8 +179,11 @@ export async function capture(options: CaptureOptions): Promise<void> {
     }
 
     safeLog("Closing browser…");
-    await withTimeout(browser.close(), 3000, "browser close").catch((err) => {
-      safeWarn(`  ⚠ ${err.message}`);
+    // Fire-and-forget: process.exit(0) below will kill the Chromium subprocess
+    // anyway, and awaiting browser.close() can hang for reasons unclear to us
+    // (Playwright IPC stalling, etc.). Don't let it block our exit.
+    browser.close().catch(() => {
+      // ignore — the process is about to die anyway
     });
   }
 
