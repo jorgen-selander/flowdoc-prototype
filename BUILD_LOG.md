@@ -333,6 +333,52 @@ Then a full capture run with audio on. User confirmed it sounded clean.
 
 ---
 
+## Session 10: Local whisper transcription (v0.6b)
+
+**Time:** ~10:30
+**Duration:** ~45 min
+**Commit:** `f2052a8` — Add `flowdoc transcribe` — local Swedish whisper via KBLab
+
+Phase 2 of the narration plan: take the per-step audio files produced by `flowdoc capture` and turn them into text using `KBLab/kb-whisper-large` running locally via the `transformers` library. No cloud APIs, no audio leaving the machine.
+
+### Architecture
+
+Long-lived Python subprocess + thin Node wrapper, talking over a JSON-line stdin/stdout protocol:
+
+- `scripts/transcribe.py` — loads the model once (`pipeline("automatic-speech-recognition", model="KBLab/kb-whisper-large")`), prints `{"ready": true}`, then reads one audio path per line on stdin and writes `{"path": ..., "text": ...}` or `{"path": ..., "error": ...}` on stdout. ~50 lines.
+- `src/transcribe.ts` — spawns the Python process, parses the line-delimited JSON, exposes `transcribe(audioPath) → Promise<string>` with a small in-memory queue so requests run sequentially. ~200 lines.
+
+Idempotency via a `narration.audioMtime` fingerprint (`<mtimeMs>:<size>`). Each successful transcription stamps the fingerprint of the audio file it consumed; re-runs skip steps whose audio hasn't changed. Re-record a single step in a fresh `flowdoc capture` run → only that one re-transcribes. Cheap, no hashing, no separate DB.
+
+### The graceful inheritance from Phase 1
+
+When I wrote `markdown.ts`'s `appendNarration()` back during Phase 1 audio, I already coded the transcript blockquote case (it was unreachable until Phase 2 landed). Same with `WorkflowNode.transcript` being optional. So Phase 2 was almost entirely *additive*: one new file each on the Python and Node sides, three small touch-ups (`graph.ts` to copy the transcript onto nodes, `miro.ts` to render it as a second italic line in shapes, `types.ts` to add `audioMtime`), and one new subcommand registration. The README and Miro outputs picked up transcripts with zero code changes in the generators themselves.
+
+### Live test
+
+User created a venv, `pip install -r requirements.txt` (transformers 5.9.0, torch 2.12.0, total ~700 MB download), ran:
+
+```
+node dist/index.js transcribe flowdocs/audio-test4
+Loading whisper model (first run downloads ~3 GB from HuggingFace)...
+Model ready. Transcribing 9 step(s)...
+  [0] step-000 ✓ "Då är vi på startsidan för Astrid Frisk och här väljer vi kl…"
+  [1] step-001 ✓ "När vi har kommit till kunskaper får vi upp en ruta med dire…"
+  …
+  [8] step-008 ✓ "Då är vi klara."
+Done. README.md regenerated with transcripts inline.
+```
+
+Nine fluid Swedish sentences from a single demo capture. KBLab's Swedish-tuned whisper handled student names, technical UI terms ("Ämnesöversikt", "godtagbara"), and a closing "Då är vi klara" cleanly.
+
+### What surprised me
+
+- The "load model once, stream paths in" architecture saves 10–15 s of model-load latency *per call*. For a 9-step flow with sub-2-second transcriptions that's the difference between 20 s total and 2 minutes.
+- Phase 1's "write the not-yet-reachable branch anyway" calls (`appendNarration`'s transcript path, `WorkflowNode.transcript`) felt mildly speculative at the time. They paid off completely in Phase 2: zero touch-up needed in the generators. The split-in-two phasing only worked cleanly *because* Phase 1 already shaped data for Phase 2.
+- transformers 5.9 changed the pipeline kwargs slightly from older docs — `generate_kwargs={"language": "sv", "task": "transcribe"}` is the current way. The plan-written sketch had only `language`; adding `task` makes it more robust against the model trying to translate.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -348,8 +394,9 @@ Then a full capture run with audio on. User confirmed it sounded clean.
 | v0.5 | `0ae6b4c` | Branching — graph model, `--branch` flag, shared-prefix detection, Y-fork layout |
 | v0.6a | `e981446` | Live audio narration during capture (ffmpeg + per-step slicing) |
 | v0.6a.1 | `2016d07` | Auto-detect macOS default mic, `--mic` override, 48 kHz / voip Opus tuning |
+| v0.6b | `f2052a8` | Local Swedish whisper transcription via KBLab + Python subprocess |
 
-**Total time:** ~4.5 hours from empty repo to a tool that captures narrated workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
+**Total time:** ~5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, and publishes the result as a Miro board with native shapes, branches, and per-step Swedish narration.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture

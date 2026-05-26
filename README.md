@@ -15,9 +15,10 @@ Playwright will auto-install Chromium via the `postinstall` script.
 
 ## Usage
 
-FlowDoc has two subcommands:
+FlowDoc has three subcommands:
 
 - `flowdoc capture` — record a browser workflow (with optional voice narration) into a local folder
+- `flowdoc transcribe` — transcribe per-step audio to text using KBLab whisper (Swedish, local)
 - `flowdoc miro` — push a captured flow to a Miro board
 
 ### `flowdoc capture`
@@ -70,6 +71,37 @@ flowdocs/my-flow/
   screenshots/         # PNG screenshot per step
   audio/               # Master recording.webm + per-step step-NNN.webm slices (if audio was on)
 ```
+
+### `flowdoc transcribe`
+
+Transcribe the audio recorded by `flowdoc capture` to text using `KBLab/kb-whisper-large` running locally via the `transformers` library. Audio never leaves your machine.
+
+```bash
+npx flowdoc transcribe flowdocs/<flow-name>
+```
+
+| Argument | Description |
+|---|---|
+| `<flow-folder>` | Path to a captured flow folder containing `workflow-steps.json` and `audio/` |
+
+#### Setup (one time)
+
+You need Python 3 and the `transformers` + `torch` libraries. The recommended path is an isolated virtualenv at the project root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+The first transcription downloads the KBLab model (~3 GB) into `~/.cache/huggingface/`. Subsequent runs start in a few seconds.
+
+#### What it does
+
+- Walks each step's `narration.audioPath`, sends it to a long-lived Python subprocess running the model, writes the result into `narration.transcript`.
+- **Idempotent.** Each successful transcription stores the audio file's `<mtime>:<size>` in `narration.audioMtime`. On re-run, steps whose fingerprint matches are skipped. Re-record one step in a fresh capture run → only that one re-transcribes.
+- Regenerates `README.md` with the transcripts as blockquotes above the 🎧 audio links.
+- The next `flowdoc miro` run automatically surfaces each transcript as a second italic line under the shape title on the board.
 
 ### `flowdoc miro`
 

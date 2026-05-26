@@ -68,6 +68,22 @@ Four files come out of `flowdocs/<name>/`:
 - `notes-template.md` — `src/notes.ts`. Empty per-step sections for human annotation.
 - `workflow-steps.json` — the processed steps verbatim. This is the *machine-readable* artifact that `flowdoc miro` reads.
 
+## Transcription (`src/transcribe.ts` + `scripts/transcribe.py`)
+
+`flowdoc transcribe <flow-folder>` walks each step's `narration.audioPath` and writes a Swedish text transcript into `narration.transcript`. Everything runs locally — no audio leaves the machine.
+
+The architecture is a long-lived Python subprocess plus a thin Node wrapper:
+
+- **Python worker (`scripts/transcribe.py`).** Loads `KBLab/kb-whisper-large` via the `transformers` `automatic-speech-recognition` pipeline once at startup (3 GB model, cached in `~/.cache/huggingface/`). Reads one audio path per line on stdin, writes one JSON object per line on stdout. The first line is `{"ready": true}` so the Node side knows when it can start sending paths. Each subsequent line is either `{"path": "...", "text": "..."}` or `{"path": "...", "error": "..."}`.
+
+- **Node wrapper (`src/transcribe.ts`).** Spawns `python3 scripts/transcribe.py`, parses line-delimited JSON, manages a small in-memory queue so requests are processed sequentially (the model isn't parallel-safe). Exposes `transcribe(path) → Promise<string>`. Persists `workflow-steps.json` after each successful transcription, so Ctrl+C mid-run loses nothing already done.
+
+- **Idempotency.** When a transcript is written, `narration.audioMtime` is set to `<mtimeMs>:<size>` of the audio file. On re-run, steps whose audio fingerprint matches the stored value are skipped. Re-record one step → only that one re-transcribes. Cheap, file-system-only, no hashing.
+
+- **README regeneration.** After all transcriptions, `generateMarkdown()` is called again. It already handled the `narration.transcript` case during Phase 1 (renders as a `> blockquote` above the 🎧 audio link), so no extra code path was needed.
+
+- **Miro pickup.** `stepsToGraph()` copies `step.narration?.transcript` onto each `WorkflowNode`. `shapeBody()` in `src/miro.ts` appends an italic second `<p>` line under the title when set. So re-running `flowdoc miro` after a transcribe pass surfaces the transcripts on the board automatically — no new flag, no separate command.
+
 ## The Miro export
 
 `flowdoc miro` reads `workflow-steps.json`, runs it through `src/graph.ts` to convert into a `WorkflowGraph` (nodes + edges), then POSTs to Miro's REST v2 API:
@@ -97,6 +113,8 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | `src/capture.ts` | Launches Playwright, waits for Enter, owns the recorder + audio lifecycle, fires post-processing + generation on Ctrl+C |
 | `src/recorder.ts` | The injected browser script + the Node-side event handler that turns events into `RecordedStep`s |
 | `src/audio.ts` | ffmpeg subprocess wrapper: mic detection, recording, per-step slicing |
+| `src/transcribe.ts` | Python subprocess wrapper for KBLab whisper transcription |
+| `scripts/transcribe.py` | Long-lived Python worker that loads the whisper model and reads/writes JSON lines |
 | `src/postprocess.ts` | 4-pass pipeline: `RecordedStep[]` → `WorkflowStep[]` |
 | `src/markdown.ts` | Renders `README.md` from steps (including 🎧 audio links when narration is present) |
 | `src/mermaid.ts` | Renders `flow.mmd` flowchart |
