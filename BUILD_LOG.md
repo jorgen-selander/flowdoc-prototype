@@ -235,6 +235,49 @@ Worked cleanly. *"Great! Update docs, commit and push"*.
 
 ---
 
+## Session 8: Live audio narration (v0.6a — pivoted)
+
+**Time:** ~08:45
+**Duration:** ~50 min (incl. one wrong turn)
+**Commit:** `e981446` — Record per-step audio narration live during `flowdoc capture`
+
+The goal: make voice the documentation primitive. Each step in the README gets a 🎧 audio link. Later (Phase 2, deferred) a Whisper transcription pass folds the transcript inline.
+
+### First design (wrong): separate slide-deck pass
+
+The first plan was a separate `flowdoc narrate <flow-folder>` command that opens a Chromium slide-deck UI — one screenshot per slide with Record/Stop/Prev/Next buttons. ChatGPT was consulted and suggested splitting transcription out into a separate Phase 2; that part was right and is still the plan. The slide-deck design was implemented end-to-end: HTTP server, MediaRecorder, `getUserMedia`, base64 round-trip, audio file writes, README regeneration. Build was clean.
+
+Then the user pushed back on the underlying assumption:
+
+> "Driving the UI and explaining out loud at the same time is hard." This assumption is wrong, this is what people like me do all the time.
+
+Correct. PMs / designers / anyone who's done a Loom walkthrough does exactly this. The cognitive-load argument was a generalised assumption from a non-typical user. The slide-deck pass became friction, not a feature.
+
+### Second design (shipped): live audio during capture
+
+Pivoted to: when you press Enter to start `flowdoc capture`, audio recording also starts. Each click is a timestamp that becomes a split point in the master audio. On Ctrl+C, the master is sliced into per-step files.
+
+Technical call: do the audio in Node via an **ffmpeg subprocess**, not in the browser:
+- Survives page navigation (browser-side MediaRecorder dies on navigate; the captured site might reload several times).
+- No `getUserMedia` permission prompt on the captured site itself.
+- One master file, sliced deterministically at the end with `ffmpeg -ss/-to -c:a libopus`.
+- ffmpeg is already the Phase 2 transcription dep, so adding it now is no new surface.
+
+Implementation:
+- `src/audio.ts` (new) — `AudioRecorder` class wraps the ffmpeg subprocess. `start()` spawns `ffmpeg -f avfoundation -i ":0" -c:a libopus`, sends `q\n` on stdin to stop cleanly, then `sliceByRanges()` cuts the master into per-step `.webm` files.
+- `src/capture.ts` — checks ffmpeg at startup, starts the recorder when Enter is pressed, stops it on shutdown, attaches `narration` (audioPath, durationMs, recordedAt) to each WorkflowStep before generation.
+- `src/types.ts` — added `Narration` interface and `audio: boolean` to `CaptureOptions`.
+- `src/markdown.ts` — when a step has `narration`, render a `🎧 [Audio narration](path) · 4.2s` line above the screenshot.
+- Deleted `src/narrate.ts` + `src/narration-ui.ts` (the slide-deck stuff from the first design).
+
+### What surprised me
+
+- The pivot deleted ~400 lines of working code 30 minutes after writing it. That's the right move when the design is wrong, but it's a sharp reminder that "works" isn't the same as "right". Plan-mode confidence is no substitute for the user pushing back on a load-bearing assumption.
+- ffmpeg's `q\n`-on-stdin stop is much cleaner than `SIGINT` for getting a valid finalised file. SIGINT often leaves a corrupt header.
+- Slicing with `-c:a libopus` (re-encode) is only fractionally slower than `-c copy` for short clips and avoids keyframe-boundary surprises. Sticking with re-encode for reliability.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -248,8 +291,9 @@ Worked cleanly. *"Great! Update docs, commit and push"*.
 | v0.4 | `d2e8fb7` | Miro export — `flowdoc miro` subcommand, always emit `workflow-steps.json` |
 | — | `ba8cf77` | Defensive `.gitignore` for secrets |
 | v0.5 | `0ae6b4c` | Branching — graph model, `--branch` flag, shared-prefix detection, Y-fork layout |
+| v0.6a | `e981446` | Live audio narration during capture (ffmpeg + per-step slicing) |
 
-**Total time:** ~3 hours from empty repo to a tool that captures workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
+**Total time:** ~4 hours from empty repo to a tool that captures narrated workflows AND pushes them to a Miro board as editable native shapes, with support for branched (multi-path) flows.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
