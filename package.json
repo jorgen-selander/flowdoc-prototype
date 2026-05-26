@@ -1,0 +1,23 @@
+{
+  "name": "flowdoc",
+  "version": "1.0.0",
+  "description": "Capture browser workflows and generate Markdown documentation with screenshots",
+  "main": "dist/index.js",
+  "bin": {
+    "flowdoc": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "postinstall": "npx playwright install chromium"
+  },
+  "keywords": ["documentation", "browser", "workflow", "playwright", "screenshots"],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}
