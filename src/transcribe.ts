@@ -1,9 +1,10 @@
-import { spawn, spawnSync, ChildProcess } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { Narration, WorkflowStep } from "./types";
 import { generateMarkdown } from "./markdown";
 import { generateSite } from "./site";
+import { preferredPython } from "./python";
 
 interface PendingRequest {
   audioPath: string;
@@ -21,14 +22,15 @@ export class Transcriber {
   private exited = false;
 
   async start(): Promise<void> {
-    const python = pickPython();
+    const repoRoot = path.resolve(__dirname, "..");
+    const python = preferredPython(repoRoot);
     if (!python) {
       throw new Error(
         "No working python3 / python on PATH. Install Python 3 (e.g. `brew install python`) and rerun.",
       );
     }
 
-    const scriptPath = path.resolve(__dirname, "..", "scripts", "transcribe.py");
+    const scriptPath = path.join(repoRoot, "scripts", "transcribe.py");
     if (!fs.existsSync(scriptPath)) {
       throw new Error(`Transcriber script not found at ${scriptPath}`);
     }
@@ -136,14 +138,6 @@ export class Transcriber {
       }
     }, 1500).unref();
   }
-}
-
-function pickPython(): string | null {
-  for (const bin of ["python3", "python"]) {
-    const r = spawnSync(bin, ["--version"], { encoding: "utf-8" });
-    if (r.status === 0) return bin;
-  }
-  return null;
 }
 
 function audioFingerprint(absPath: string): string | null {

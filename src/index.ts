@@ -8,6 +8,7 @@ import { generateMiro } from "./miro";
 import { layoutGraph, mergeGraphs, stepsToGraph } from "./graph";
 import { transcribeFlow } from "./transcribe";
 import { generateSite } from "./site";
+import { runDoctor } from "./doctor";
 import { WorkflowStep } from "./types";
 
 function collect(value: string, prev: string[]): string[] {
@@ -133,6 +134,15 @@ program
     const name = path.basename(flowDir);
     const sitePath = await generateSite({ name, startUrl, steps, outputDir: flowDir });
     console.log(`Wrote ${sitePath}`);
+  });
+
+program
+  .command("doctor")
+  .description("Check that your local environment is set up for FlowDoc")
+  .action(async () => {
+    const repoRoot = path.resolve(__dirname, "..");
+    const code = await runDoctor(repoRoot);
+    process.exit(code);
   });
 
 program.parse();

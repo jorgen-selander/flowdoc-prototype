@@ -4,6 +4,8 @@ Capture browser workflows and generate Markdown documentation with screenshots â
 
 FlowDoc opens a real browser (Chromium via Playwright), records your clicks, inputs, and navigations, then generates a step-by-step README with screenshots, a Mermaid flowchart, and a notes template.
 
+> **New teammate?** Start with [`ONBOARDING.md`](./ONBOARDING.md) â€” it walks through setup in ~15 minutes and verifies your environment with `flowdoc doctor`. Already set up? Jump to [`QUICKSTART.md`](./QUICKSTART.md) for the daily command sequence.
+
 ## Install
 
 ```bash
