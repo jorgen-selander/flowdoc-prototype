@@ -36,12 +36,14 @@ program
   .requiredOption("--name <name>", "Name for this flow (used as folder name)")
   .option("--output <dir>", "Output directory", "flowdocs")
   .option("--debug", "Also output raw-events.json for debugging")
+  .option("--no-audio", "Skip microphone narration recording (audio is on by default)")
   .action(async (opts) => {
     await capture({
       url: opts.url,
       name: opts.name,
       outputDir: opts.output,
       debug: opts.debug || false,
+      audio: opts.audio !== false,
     });
   });
 

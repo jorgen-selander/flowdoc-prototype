@@ -1,20 +1,32 @@
 import { chromium } from "playwright";
 import * as readline from "readline";
 import * as fs from "fs";
-import { CaptureOptions } from "./types";
+import { CaptureOptions, WorkflowStep } from "./types";
 import { Recorder } from "./recorder";
 import { postprocess } from "./postprocess";
 import { generateMarkdown } from "./markdown";
 import { generateMermaid } from "./mermaid";
 import { generateNotes } from "./notes";
 import { ensureScreenshotDir } from "./screenshot";
+import { AudioRecorder, checkFfmpeg } from "./audio";
 import * as path from "path";
 
 export async function capture(options: CaptureOptions): Promise<void> {
-  const { url, name, outputDir, debug } = options;
+  const { url, name, outputDir, debug, audio } = options;
   const flowDir = path.join(outputDir, name);
 
   await ensureScreenshotDir(flowDir);
+
+  let audioRecorder: AudioRecorder | null = null;
+  let audioWanted = audio;
+  if (audioWanted) {
+    const check = checkFfmpeg();
+    if (!check.ok) {
+      console.warn(`\n⚠ Audio recording disabled: ${check.reason}.`);
+      console.warn(`  Install ffmpeg (e.g. \`brew install ffmpeg\`) and rerun without --no-audio to enable narration.`);
+      audioWanted = false;
+    }
+  }
 
   console.log(`\nLaunching browser...`);
 
@@ -39,10 +51,24 @@ export async function capture(options: CaptureOptions): Promise<void> {
     recorder.stop();
     await recorder.waitForPending();
 
+    if (audioRecorder) {
+      try {
+        await audioRecorder.stop();
+      } catch (err) {
+        console.warn(`  ⚠ ffmpeg stop error: ${(err as Error).message}`);
+      }
+    }
+
     const rawSteps = recorder.getSteps();
     if (rawSteps.length > 0) {
       console.log("Processing captured steps...");
       const workflowSteps = postprocess(rawSteps);
+
+      if (audioRecorder && audioRecorder.hasRecording()) {
+        console.log("Slicing audio into per-step segments...");
+        await attachNarration(workflowSteps, audioRecorder);
+      }
+
       const stepCount = workflowSteps.filter((s) => s.rawSteps[0].action !== "start").length;
       console.log(`Generating documentation (${stepCount} workflow steps from ${rawSteps.length} raw events)...`);
 
@@ -73,6 +99,9 @@ export async function capture(options: CaptureOptions): Promise<void> {
       console.log(`Flowchart:      ${path.join(flowDir, "flow.mmd")}`);
       console.log(`Notes template: ${path.join(flowDir, "notes-template.md")}`);
       console.log(`Screenshots:    ${path.join(flowDir, "screenshots")}/`);
+      if (audioRecorder && audioRecorder.hasRecording()) {
+        console.log(`Audio:          ${path.join(flowDir, "audio")}/`);
+      }
     } else {
       console.log("No steps were recorded.");
     }
@@ -104,6 +133,18 @@ export async function capture(options: CaptureOptions): Promise<void> {
     });
   });
 
+  if (audioWanted) {
+    audioRecorder = new AudioRecorder({ outputDir: flowDir });
+    try {
+      await audioRecorder.start();
+      console.log("🎙  Audio recording started.");
+    } catch (err) {
+      console.warn(`⚠ Audio recording failed to start: ${(err as Error).message}`);
+      console.warn(`  Continuing without audio.`);
+      audioRecorder = null;
+    }
+  }
+
   console.log("Recording started!\n");
 
   // Set up recorder on the page and context
@@ -118,4 +159,35 @@ export async function capture(options: CaptureOptions): Promise<void> {
 
   // Keep the process alive
   await new Promise(() => {});
+}
+
+async function attachNarration(
+  workflowSteps: WorkflowStep[],
+  audioRecorder: AudioRecorder,
+): Promise<void> {
+  const audioStart = audioRecorder.getStartedAtMs();
+  const audioEnd = audioRecorder.getStoppedAtMs();
+
+  const ranges = workflowSteps.map((step, i) => {
+    const startMs = (step.rawSteps[0]?.timestamp ?? audioStart) - audioStart;
+    const next = workflowSteps[i + 1];
+    const endMs = next
+      ? (next.rawSteps[0]?.timestamp ?? audioEnd) - audioStart
+      : audioEnd - audioStart;
+    return { stepIndex: step.index, startMs, endMs };
+  });
+
+  const sliced = await audioRecorder.sliceByRanges(ranges);
+  const recordedAtBase = new Date(audioStart);
+
+  for (const step of workflowSteps) {
+    const slice = sliced.get(step.index);
+    if (!slice) continue;
+    const range = ranges.find((r) => r.stepIndex === step.index)!;
+    step.narration = {
+      audioPath: slice.audioPath,
+      durationMs: slice.durationMs,
+      recordedAt: new Date(recordedAtBase.getTime() + range.startMs).toISOString(),
+    };
+  }
 }

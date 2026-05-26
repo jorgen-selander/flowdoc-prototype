@@ -52,6 +52,7 @@ export async function generateMarkdown(options: MarkdownOptions): Promise<string
   if (startStep && startStep.screenshotPath) {
     lines.push(`## Start: ${pageName(startStep.url)}`);
     lines.push("");
+    appendNarration(lines, startStep);
     lines.push(`![Start](${startStep.screenshotPath})`);
     lines.push("");
     lines.push("---");
@@ -76,6 +77,8 @@ export async function generateMarkdown(options: MarkdownOptions): Promise<string
       lines.push(`**Value:** ${step.value}`);
       lines.push("");
     }
+
+    appendNarration(lines, step);
 
     if (step.screenshotPath) {
       lines.push(`![Step ${stepNum}](${step.screenshotPath})`);
@@ -104,4 +107,16 @@ export async function generateMarkdown(options: MarkdownOptions): Promise<string
   const readmePath = path.join(outputDir, "README.md");
   await fs.promises.writeFile(readmePath, content, "utf-8");
   return readmePath;
+}
+
+function appendNarration(lines: string[], step: WorkflowStep): void {
+  const n = step.narration;
+  if (!n) return;
+  if (n.transcript) {
+    lines.push(`> ${n.transcript.replace(/\n/g, "\n> ")}`);
+    lines.push("");
+  }
+  const seconds = (n.durationMs / 1000).toFixed(1);
+  lines.push(`🎧 [Audio narration](${n.audioPath}) · ${seconds}s`);
+  lines.push("");
 }

@@ -3,6 +3,7 @@ export interface CaptureOptions {
   name: string;
   outputDir: string;
   debug: boolean;
+  audio: boolean;
 }
 
 export type ActionType = "click" | "input" | "navigation" | "start";
@@ -18,6 +19,13 @@ export interface RecordedStep {
   screenshotPath: string;
 }
 
+export interface Narration {
+  audioPath: string;
+  durationMs: number;
+  recordedAt: string;
+  transcript?: string;
+}
+
 export interface WorkflowStep {
   index: number;
   title: string;
@@ -28,6 +36,7 @@ export interface WorkflowStep {
   value?: string;
   screenshotPath: string;
   rawSteps: RecordedStep[];
+  narration?: Narration;
 }
 
 export interface BrowserEvent {

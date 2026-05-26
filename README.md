@@ -17,13 +17,13 @@ Playwright will auto-install Chromium via the `postinstall` script.
 
 FlowDoc has two subcommands:
 
-- `flowdoc capture` — record a browser workflow into a local folder
+- `flowdoc capture` — record a browser workflow (with optional voice narration) into a local folder
 - `flowdoc miro` — push a captured flow to a Miro board
 
 ### `flowdoc capture`
 
 ```bash
-npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--debug]
+npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--debug] [--no-audio]
 ```
 
 | Option | Required | Default | Description |
@@ -32,14 +32,21 @@ npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--
 | `--name <name>` | Yes | | Flow name (used as output folder name) |
 | `--output <dir>` | No | `flowdocs` | Output directory |
 | `--debug` | No | | Also write `raw-events.json` for debugging |
+| `--no-audio` | No | | Skip microphone narration recording |
 
 #### Workflow
 
 1. The browser opens and navigates to `--url`
 2. **Browse freely** — log in, dismiss popups, navigate to the starting point
-3. **Press Enter** in the terminal to start recording
-4. Perform the workflow you want to document
-5. Press **Ctrl+C** to stop recording and generate docs
+3. **Press Enter** in the terminal — both event recording and microphone recording start
+4. Click through the workflow, **narrating out loud** as you go. Every click is a timestamp that becomes a split point in the audio.
+5. Press **Ctrl+C** to stop. The master audio is sliced into per-step files based on click timestamps, screenshots and `workflow-steps.json` are written, and the README is generated.
+
+#### Audio narration
+
+Audio capture uses an `ffmpeg` subprocess reading the macOS default mic via `avfoundation`. It is on by default; pass `--no-audio` to skip. Install ffmpeg with `brew install ffmpeg` if you don't already have it. On first use, macOS prompts your terminal app for microphone access.
+
+Each step gets its own `audio/step-NNN.webm` slice covering the time from when you clicked into that step until the next click. The README lists a 🎧 audio link per step.
 
 #### Output
 
@@ -47,11 +54,12 @@ For a flow named `my-flow`, output lands in `flowdocs/my-flow/`:
 
 ```
 flowdocs/my-flow/
-  README.md            # Step-by-step documentation with screenshots
+  README.md            # Step-by-step documentation with screenshots + audio links
   flow.mmd             # Mermaid flowchart of page navigations
   notes-template.md    # Per-step notes template for manual annotation
   workflow-steps.json  # Processed steps (consumed by `flowdoc miro`)
   screenshots/         # PNG screenshot per step
+  audio/               # Master recording.webm + per-step step-NNN.webm slices (if audio was on)
 ```
 
 ### `flowdoc miro`
@@ -95,12 +103,13 @@ The exporter walks both flows in parallel from step 0 and shares any prefix step
 ## How it works
 
 - **Recording** — An injected script listens for clicks, input changes, and URL changes (including `pushState`/`replaceState`) inside the browser. Each event triggers a screenshot.
+- **Audio** — When audio is on, an `ffmpeg` subprocess starts the moment Enter is pressed and records the system mic to `audio/recording.webm`. Each click event's timestamp marks a split point. On shutdown the master is sliced into `audio/step-NNN.webm` per step.
 - **Post-processing** — Raw events go through four passes:
   1. Deduplicate nested clicks (e.g. clicking a link inside a div)
   2. Merge click + navigation pairs, and detect silent URL changes (SPAs)
   3. Generate human-readable step titles
   4. Re-index steps
-- **Generation** — Processed steps are rendered into Markdown, Mermaid, a notes template, and `workflow-steps.json` (the source of truth for the Miro export).
+- **Generation** — Processed steps are rendered into Markdown (with 🎧 audio links per step when narration is present), Mermaid, a notes template, and `workflow-steps.json` (the source of truth for the Miro export).
 - **Miro export** — `workflow-steps.json` (and any branch flows) are converted to a graph (`WorkflowNode` + `WorkflowEdge`), prefix-merged when branches are supplied, laid out with depth → x and lane → y, and pushed to Miro's REST v2 API as rounded-rectangle shapes plus elbowed connectors, sequenced sequentially with a soft rate-limit cushion.
 
 ## License
