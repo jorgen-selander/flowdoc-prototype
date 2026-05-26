@@ -23,7 +23,7 @@ FlowDoc has two subcommands:
 ### `flowdoc capture`
 
 ```bash
-npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--debug] [--no-audio]
+npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--debug] [--no-audio] [--mic <name-or-index>]
 ```
 
 | Option | Required | Default | Description |
@@ -33,6 +33,7 @@ npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--
 | `--output <dir>` | No | `flowdocs` | Output directory |
 | `--debug` | No | | Also write `raw-events.json` for debugging |
 | `--no-audio` | No | | Skip microphone narration recording |
+| `--mic <name-or-index>` | No | macOS system default | Pick a specific avfoundation audio input — a numeric index or a case-insensitive substring of the device name (e.g. `--mic Yeti`) |
 
 #### Workflow
 
@@ -44,7 +45,15 @@ npx flowdoc capture --url <starting-url> --name <flow-name> [--output <dir>] [--
 
 #### Audio narration
 
-Audio capture uses an `ffmpeg` subprocess reading the macOS default mic via `avfoundation`. It is on by default; pass `--no-audio` to skip. Install ffmpeg with `brew install ffmpeg` if you don't already have it. On first use, macOS prompts your terminal app for microphone access.
+Audio capture uses an `ffmpeg` subprocess reading the system mic via `avfoundation`. It is on by default; pass `--no-audio` to skip. Install ffmpeg with `brew install ffmpeg` if you don't already have it. On first use, macOS prompts your terminal app for microphone access.
+
+**Mic selection.** On startup, FlowDoc reads your macOS system-default input device from `system_profiler` and matches it against the avfoundation device list. If detection fails it falls back to a built-in mic (`MacBook Pro Microphone`, `MacBook Air Microphone`, `Built-in Microphone`), and only then to device 0 — avoiding Continuity iPhone mics or other unreliable virtual devices that often live at index 0. To override the auto-detected device, pass `--mic <name-or-index>` (substring match, e.g. `--mic Yeti`). The chosen device is printed at startup:
+
+```
+🎙  Audio input: Fargo (avfoundation device 5)
+```
+
+Recording uses 48 kHz mono Opus in `voip` mode at 96 kbps — matching the mic's native sample rate (no resample stutter) and giving clear voice quality without inflated file sizes.
 
 Each step gets its own `audio/step-NNN.webm` slice covering the time from when you clicked into that step until the next click. The README lists a 🎧 audio link per step.
 

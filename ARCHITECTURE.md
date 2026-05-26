@@ -4,7 +4,7 @@ A walkthrough of the moving parts behind `flowdoc capture` and `flowdoc miro`, w
 
 ## The architecture in one sentence
 
-FlowDoc launches a real Chromium browser, injects a JavaScript snitch into every page, listens for the user's clicks/inputs/navigations from Node via a bidirectional bridge, screenshots each event, then post-processes the raw event stream into clean steps that get rendered to Markdown, Mermaid, JSON, and Miro.
+FlowDoc launches a real Chromium browser, injects a JavaScript snitch into every page, listens for the user's clicks/inputs/navigations from Node via a bidirectional bridge, screenshots each event, records voice narration from the system mic via an ffmpeg subprocess in parallel, then post-processes the raw event stream into clean steps that get rendered to Markdown, Mermaid, JSON, and Miro.
 
 ## Playwright's job
 
@@ -31,6 +31,22 @@ The injected script (`INJECTED_SCRIPT` constant in `src/recorder.ts`) is a self-
 - Wraps `history.pushState` / `history.replaceState` and listens for `popstate` / `hashchange` to catch SPA navigations that don't trigger a full page load.
 
 Every reported event triggers a Node-side handler that waits 300ms for the DOM to settle, snaps a screenshot, and appends a `RecordedStep` to an in-memory array.
+
+## Voice narration (`src/audio.ts`)
+
+When you press Enter to start recording, FlowDoc spawns an `ffmpeg` subprocess in parallel with the click/screenshot recorder. The subprocess captures the system mic via macOS avfoundation and writes a single master file (`audio/recording.webm`). On Ctrl+C, the master is sliced into per-step files (`audio/step-NNN.webm`), each covering the time between two consecutive click timestamps.
+
+A few details that matter:
+
+- **Mic detection.** avfoundation's `-i :N` syntax requires a numeric device index. Picking `:0` blindly is a trap on multi-mic systems — index 0 is often a Continuity iPhone mic that produces choppy audio over Bluetooth. FlowDoc reads the macOS system-default input from `system_profiler SPAudioDataType`, looks it up in the avfoundation device list parsed from `ffmpeg -list_devices true -i ""`, and uses that index instead. Override with `--mic <name-or-index>`.
+
+- **Encoder settings.** 48 kHz mono (matches mic native rate — requesting a different rate forces real-time resampling, which stutters under Playwright's CPU load), Opus codec in `voip` application mode at 96 kbps. `-thread_queue_size 4096` gives the avfoundation input thread a big enough buffer to survive CPU spikes.
+
+- **Clean shutdown.** ffmpeg is stopped by writing `q\n` to its stdin (graceful — finalises the WebM container). SIGINT would also stop it but often leaves a corrupt header.
+
+- **Slicing.** Each step's audio range is `[step.timestamp - audioStart, nextStep.timestamp - audioStart]`. ffmpeg re-encodes each slice (`-c:a libopus -b:a 96k`) rather than stream-copying, to sidestep keyframe-boundary issues. For typical 5–20 step flows this adds a second or two of post-processing.
+
+Audio capture is on by default and gracefully degrades: if ffmpeg isn't on PATH the capture warns and continues silently; if the chosen mic can't be opened it falls back to no audio without aborting the capture.
 
 ## Why post-processing exists
 
@@ -78,10 +94,11 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | File | Role |
 |---|---|
 | `src/index.ts` | Commander CLI — `capture` and `miro` subcommands |
-| `src/capture.ts` | Launches Playwright, waits for Enter, owns the recorder lifecycle, fires post-processing + generation on Ctrl+C |
+| `src/capture.ts` | Launches Playwright, waits for Enter, owns the recorder + audio lifecycle, fires post-processing + generation on Ctrl+C |
 | `src/recorder.ts` | The injected browser script + the Node-side event handler that turns events into `RecordedStep`s |
+| `src/audio.ts` | ffmpeg subprocess wrapper: mic detection, recording, per-step slicing |
 | `src/postprocess.ts` | 4-pass pipeline: `RecordedStep[]` → `WorkflowStep[]` |
-| `src/markdown.ts` | Renders `README.md` from steps |
+| `src/markdown.ts` | Renders `README.md` from steps (including 🎧 audio links when narration is present) |
 | `src/mermaid.ts` | Renders `flow.mmd` flowchart |
 | `src/notes.ts` | Renders `notes-template.md` |
 | `src/graph.ts` | `WorkflowStep[]` → `WorkflowGraph`, branch merging, layout |
