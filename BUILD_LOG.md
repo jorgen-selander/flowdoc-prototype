@@ -128,6 +128,54 @@ Before switching to another computer, created:
 
 ---
 
+## Session 6: Miro Export (v0.4)
+
+**Time:** ~07:30 (next morning, new machine)
+**Duration:** ~30 min
+**Commits:** `d2e8fb7` — Add `flowdoc miro` subcommand, `ba8cf77` — Expand .gitignore
+
+Wanted to take a captured flow and visualise it on a Miro board as native, editable shapes — not just a static Markdown export. Token + board ID confirmed working against `GET /v2/boards/{board_id}` before any code was written.
+
+### Planning (Plan Mode)
+
+Brief: a new `flowdoc miro --from <flow-folder> --board <board-id>` subcommand that reads `workflow-steps.json`, POSTs rounded-rectangle shapes (one per step) at `x = i*450, y = 0`, then POSTs elbowed connectors between adjacent shapes. No screenshots, no OAuth, no two-way sync.
+
+Claude (Opus 4.7) explored the codebase via subagents, surfaced four open questions, and proposed defaults. User confirmed:
+
+1. **`workflow-steps.json` is always emitted** by `capture.ts` (not gated on `--debug` any more — `raw-events.json` stays debug-gated). Means any captured flow is miro-ready without re-capturing.
+2. **The "start" step becomes a shape** at the leftmost position so the board reads top-to-bottom as an entry point + actions.
+3. **Connectors are elbowed**, with a short action-type caption (`click`, `type`, `navigate`) derived from `rawSteps[0].action`.
+
+### Implementation
+
+Three files touched:
+- **`src/capture.ts`** — moved `workflow-steps.json` write out of the `--debug` block.
+- **`src/miro.ts`** (new) — `generateMiro()` reads steps, POSTs shapes sequentially (collecting IDs), then POSTs connectors using `startItem.id`/`endItem.id`. Uses Node 22's global `fetch`, no new deps. Soft rate-limit cushion when `X-RateLimit-Remaining` drops below 10% of the limit. Errors surface Miro's response body.
+- **`src/index.ts`** — registered the `miro` subcommand alongside `capture` with token + file-existence validation.
+
+### First test on demo.unikum.net
+
+Captured 5 steps, ran the export, opened the board. Shapes + connectors appeared at the right positions, captions read `click` between every step — but the rounded rectangles themselves were invisible. The text labels just floated.
+
+**Root cause:** the shape body didn't include an explicit `style` block, so Miro applied defaults. The default 2px border vanishes at the zoom level Miro opens with after a fresh board push.
+
+**Fix:** added explicit `style` to shapes — 4px borders (green `#4caf50` for the start step, blue `#2d9bf0` for the rest), white fill, 20px Open Sans, vertically centered. Also styled the connectors: 2px dark line, 14px caption font. Same commit (`d2e8fb7`).
+
+User reaction after re-running: *"Dear Lord, this is awesome!"*
+
+### Secrets hygiene
+
+Followed up with a `.gitignore` pass to defensively block secrets before any token landed in a tracked file. Added patterns for `.env` / `.env.*` (with `!.env.example` carve-out), private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`), `secrets/` directories, and OS junk (`.DS_Store`, `Thumbs.db`). Nothing was actually tracked — purely preventative.
+
+**Commit:** `ba8cf77` — Expand .gitignore to defensively block secrets
+
+### What surprised me
+
+- Miro's v2 API renames from v1 are real and undocumented in older Stack Overflow answers: `startWidget` → `startItem`, `lineStartType` → `style.startStrokeCap`. The plan-mode agent caught this by reading the current docs instead of going from memory.
+- The "shapes look invisible" iteration was 30 seconds of work because the layout/positioning code was already correct — only the `style` block was missing. A clean separation between layout and presentation paid off.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -138,13 +186,15 @@ Before switching to another computer, created:
 | v0.2.1 | `23cd133` | Strip file extensions from page names |
 | v0.3 | `694ba56` | Always wait for Enter, detect silent URL changes |
 | — | `35f6516` | README and CLAUDE.md |
+| v0.4 | `d2e8fb7` | Miro export — `flowdoc miro` subcommand, always emit `workflow-steps.json` |
+| — | `ba8cf77` | Defensive `.gitignore` for secrets |
 
-**Total time:** ~2 hours from empty repo to documented, working tool.
+**Total time:** ~2.5 hours from empty repo to a tool that captures workflows AND pushes them to a Miro board as editable native shapes.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
-- demo.unikum.net — enterprise app with login, validated password masking and form inputs
+- demo.unikum.net — enterprise app with login, validated password masking, form inputs, and Miro export
 
-**Tools:** TypeScript, Playwright, Commander. No AI APIs, no external services, no build tools beyond `tsc`.
+**Tools:** TypeScript, Playwright, Commander, Miro REST v2 (via global `fetch`). No AI APIs, no external services, no build tools beyond `tsc`.
 
-**Process:** Planning with ChatGPT cross-check, implementation with Claude Code, manual browser testing between iterations. Each session was focused: plan → build → test → fix → commit.
+**Process:** Planning with ChatGPT cross-check, implementation with Claude Code (Opus 4.6 → 4.7), manual browser testing between iterations. Each session was focused: plan → build → test → fix → commit.
