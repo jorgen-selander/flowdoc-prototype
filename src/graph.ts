@@ -39,6 +39,7 @@ export function stepsToGraph(steps: WorkflowStep[], flowName: string): WorkflowG
       actionType: action,
       sourceFlow: flowName,
       sourceStepIndex: step.index,
+      transcript: step.narration?.transcript,
     };
   });
 

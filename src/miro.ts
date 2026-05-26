@@ -131,9 +131,13 @@ async function createConnector(
 }
 
 function shapeBody(node: WorkflowNode, x: number, y: number): object {
-  const content = node.isStart
+  const titleLine = node.isStart
     ? `<p><strong>Start:</strong> ${escapeHtml(stripStartPrefix(node.title))}</p>`
     : `<p><strong>${node.sourceStepIndex}.</strong> ${escapeHtml(node.title)}</p>`;
+  const transcriptLine = node.transcript
+    ? `<p><em>${escapeHtml(truncate(node.transcript, 240))}</em></p>`
+    : "";
+  const content = titleLine + transcriptLine;
 
   return {
     data: {
@@ -181,6 +185,11 @@ function connectorBody(startId: string, endId: string, caption?: string): object
 
 function stripStartPrefix(title: string): string {
   return title.replace(/^Start:\s*/, "");
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1).trimEnd() + "…";
 }
 
 function escapeHtml(s: string): string {

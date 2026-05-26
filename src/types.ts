@@ -25,6 +25,7 @@ export interface Narration {
   durationMs: number;
   recordedAt: string;
   transcript?: string;
+  audioMtime?: string;
 }
 
 export interface WorkflowStep {
@@ -62,6 +63,7 @@ export interface WorkflowNode {
   actionType: ActionType;
   sourceFlow: string;
   sourceStepIndex: number;
+  transcript?: string;
   x?: number;
   y?: number;
 }

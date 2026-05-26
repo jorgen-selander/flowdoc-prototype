@@ -6,6 +6,7 @@ import * as path from "path";
 import { capture } from "./capture";
 import { generateMiro } from "./miro";
 import { layoutGraph, mergeGraphs, stepsToGraph } from "./graph";
+import { transcribeFlow } from "./transcribe";
 import { WorkflowStep } from "./types";
 
 function collect(value: string, prev: string[]): string[] {
@@ -97,6 +98,19 @@ program
       await generateMiro({ graph: laid, boardId: opts.board, accessToken: token });
     } catch (err) {
       console.error(`\n${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("transcribe")
+  .description("Transcribe per-step audio narration to text using KBLab/kb-whisper-large (local)")
+  .argument("<flow-folder>", "Path to a captured flow folder containing workflow-steps.json")
+  .action(async (flowFolder: string) => {
+    try {
+      await transcribeFlow({ flowFolder });
+    } catch (err) {
+      console.error(`\nError: ${(err as Error).message}`);
       process.exit(1);
     }
   });
