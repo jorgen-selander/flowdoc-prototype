@@ -7,6 +7,7 @@ import { postprocess } from "./postprocess";
 import { generateMarkdown } from "./markdown";
 import { generateMermaid } from "./mermaid";
 import { generateNotes } from "./notes";
+import { generateSite } from "./site";
 import { ensureScreenshotDir } from "./screenshot";
 import { AudioRecorder, checkFfmpeg, resolveMicDevice } from "./audio";
 import * as path from "path";
@@ -90,6 +91,7 @@ export async function capture(options: CaptureOptions): Promise<void> {
       });
       await generateMermaid({ steps: workflowSteps, outputDir: flowDir });
       await generateNotes({ name, steps: workflowSteps, outputDir: flowDir });
+      const sitePath = await generateSite({ name, startUrl: url, steps: workflowSteps, outputDir: flowDir });
 
       await fs.promises.writeFile(
         path.join(flowDir, "workflow-steps.json"),
@@ -106,6 +108,7 @@ export async function capture(options: CaptureOptions): Promise<void> {
 
       console.log(`\nDone! ${stepCount} workflow steps captured.`);
       console.log(`Documentation:  ${readmePath}`);
+      console.log(`Site:           ${sitePath}`);
       console.log(`Flowchart:      ${path.join(flowDir, "flow.mmd")}`);
       console.log(`Notes template: ${path.join(flowDir, "notes-template.md")}`);
       console.log(`Screenshots:    ${path.join(flowDir, "screenshots")}/`);

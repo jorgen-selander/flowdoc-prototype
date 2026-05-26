@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { Narration, WorkflowStep } from "./types";
 import { generateMarkdown } from "./markdown";
+import { generateSite } from "./site";
 
 interface PendingRequest {
   audioPath: string;
@@ -241,7 +242,8 @@ export async function transcribeFlow(opts: TranscribeOptions): Promise<void> {
   const startStep = steps.find((s) => s.rawSteps[0]?.action === "start");
   const startUrl = startStep?.url ?? steps[0]?.url ?? "";
   await generateMarkdown({ name, startUrl, steps, outputDir: flowDir });
+  await generateSite({ name, startUrl, steps, outputDir: flowDir });
 
-  console.log(`\nDone. README.md regenerated with transcripts inline.`);
+  console.log(`\nDone. README.md and index.html regenerated with transcripts inline.`);
   console.log(`Re-run \`flowdoc miro\` to surface transcripts on the board.`);
 }

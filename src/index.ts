@@ -7,6 +7,7 @@ import { capture } from "./capture";
 import { generateMiro } from "./miro";
 import { layoutGraph, mergeGraphs, stepsToGraph } from "./graph";
 import { transcribeFlow } from "./transcribe";
+import { generateSite } from "./site";
 import { WorkflowStep } from "./types";
 
 function collect(value: string, prev: string[]): string[] {
@@ -113,6 +114,25 @@ program
       console.error(`\nError: ${(err as Error).message}`);
       process.exit(1);
     }
+  });
+
+program
+  .command("site")
+  .description("(Re)generate the static HTML documentation site for a captured flow")
+  .argument("<flow-folder>", "Path to a captured flow folder containing workflow-steps.json")
+  .action(async (flowFolder: string) => {
+    const flowDir = path.resolve(flowFolder);
+    const stepsPath = path.join(flowDir, "workflow-steps.json");
+    if (!fs.existsSync(stepsPath)) {
+      console.error(`Error: ${stepsPath} not found. Run \`flowdoc capture\` first.`);
+      process.exit(1);
+    }
+    const steps = JSON.parse(fs.readFileSync(stepsPath, "utf-8")) as WorkflowStep[];
+    const startStep = steps.find((s) => s.rawSteps[0]?.action === "start");
+    const startUrl = startStep?.url ?? steps[0]?.url ?? "";
+    const name = path.basename(flowDir);
+    const sitePath = await generateSite({ name, startUrl, steps, outputDir: flowDir });
+    console.log(`Wrote ${sitePath}`);
   });
 
 program.parse();
