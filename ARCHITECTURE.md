@@ -127,6 +127,8 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | `src/recorder.ts` | The injected browser script + the Node-side event handler that turns events into `RecordedStep`s |
 | `src/audio.ts` | ffmpeg subprocess wrapper: mic detection, recording, per-step slicing |
 | `src/transcribe.ts` | Python subprocess wrapper for KBLab whisper transcription |
+| `src/python.ts` | Shared Python resolution: `preferredPython` (venv first, then PATH), `hasModule` for dep checks |
+| `src/doctor.ts` | `flowdoc doctor` — environment diagnostics, diagnose-only with copy-pasteable fix commands |
 | `scripts/transcribe.py` | Long-lived Python worker that loads the whisper model and reads/writes JSON lines |
 | `src/postprocess.ts` | 4-pass pipeline: `RecordedStep[]` → `WorkflowStep[]` |
 | `src/markdown.ts` | Renders `README.md` from steps (including 🎧 audio links when narration is present) |

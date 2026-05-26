@@ -420,6 +420,37 @@ Ran `node dist/index.js site flowdocs/audio-test4` against the already-transcrib
 
 ---
 
+## Session 12: Onboarding hardening (v0.8)
+
+**Time:** ~12:00
+**Duration:** ~50 min
+**Commit:** `7c15e97` — Add `flowdoc doctor` + ONBOARDING.md for team setup
+
+After v0.7, the tool was feature-complete enough for a 3-person team to use, but the setup story was scattered across README/QUICKSTART/CLAUDE/ARCHITECTURE and assumed the reader knew what they needed. A teammate could clone the repo and still not know whether their environment was ready before trying to capture something.
+
+The session was *operational* rather than feature work — making the existing pipeline usable by people other than me without hand-holding.
+
+### What shipped
+
+- **`flowdoc doctor`** — 9-row environment checklist with green/yellow/red status: Node version, build output, ffmpeg, system mic, Python, .venv, transformers+torch, Playwright Chromium, MIRO_ACCESS_TOKEN. Diagnose only — never auto-installs. Each non-OK row shows the exact command to run. Warn rows (mic, MIRO token) don't fail the exit code since the core capture+site flow still works.
+- **`src/python.ts`** — shared Python resolution. `preferredPython(repoRoot)` checks `.venv/bin/python` first and falls back to system `python3`/`python`. Both `transcribe.ts` and `doctor.ts` use it.
+- **`transcribe.ts` auto-detects the venv** — teammates no longer need to `source .venv/bin/activate` in every shell before running `flowdoc transcribe`. If `.venv/bin/python` exists at the repo root, FlowDoc uses it automatically.
+- **`ONBOARDING.md`** — single guide that takes a new teammate from `git clone` to first narrated capture in ~15 minutes. Prerequisites with install links, exact command sequence, where to get a Miro token + board ID, three patterns for keeping the token between sessions, how to read the doctor output, and a troubleshooting list. Aimed at developers, not at button-clicking external users.
+- **`.env.example`** — committed template listing `MIRO_ACCESS_TOKEN`. The existing `.gitignore` `!.env.example` carve-out (added back in Session 7) means it just works — `.env` stays ignored, `.env.example` is tracked. No dotenv loader added; FlowDoc keeps reading from `process.env` directly. The file is documentation, not behavior.
+- **README pointer** — one short callout at the top of the README pointing teammates at `ONBOARDING.md` first, returning users at `QUICKSTART.md`.
+
+### Cross-check with ChatGPT
+
+Same review pattern as earlier sessions. ChatGPT agreed the doctor + onboarding pairing was the right move and the diagnose-only scope was correctly chosen. The one pushback: I'd initially put `.env.example` in the "out of scope" list to keep scope tight; ChatGPT argued it was basic onboarding hygiene (no extra surface, signals to teammates what secrets are expected without putting real ones in docs or Slack). Agreed. Added it back.
+
+### What surprised me
+
+- The auto-prefer-`.venv/bin/python` change is a tiny code change (one helper function, one call-site swap) with disproportionate UX impact. Without it, every fresh terminal session needs `source .venv/bin/activate` before `transcribe` works. With it, the venv is invisible — teammates set it up once and forget it exists.
+- Writing the doctor output revealed a real ambiguity: my mic earlier was Fargo at avfoundation device 5, but in this session it's Yeti at device 1. avfoundation device indices aren't stable across connect/disconnect cycles. The mic resolver handles this correctly (resolves by system default name, not index), and `flowdoc doctor` shows the current resolution at the top of every session — exactly the diagnostic I'd want when audio comes out wrong.
+- Raw ANSI escape codes (`\x1b[32m...`) for colored output worked perfectly without a `chalk` dependency. The doctor command is ~280 lines including all the colored formatting and stays inside our "no new deps" policy.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -437,8 +468,9 @@ Ran `node dist/index.js site flowdocs/audio-test4` against the already-transcrib
 | v0.6a.1 | `2016d07` | Auto-detect macOS default mic, `--mic` override, 48 kHz / voip Opus tuning |
 | v0.6b | `f2052a8` | Local Swedish whisper transcription via KBLab + Python subprocess |
 | v0.7 | `78ef24a` | Static HTML documentation site (`flowdoc site`, auto-emitted by capture + transcribe) |
+| v0.8 | `7c15e97` | `flowdoc doctor` + ONBOARDING.md + venv auto-detect for transcribe |
 
-**Total time:** ~5.5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, and publishes the result as both a Miro board with native editable shapes AND a self-contained HTML site with inline audio playback.
+**Total time:** ~6 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, publishes the result as both a Miro board with native editable shapes AND a self-contained HTML site with inline audio playback, and has a one-command environment checker for new teammates.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
