@@ -8,23 +8,33 @@ import { generateMarkdown } from "./markdown";
 import { generateMermaid } from "./mermaid";
 import { generateNotes } from "./notes";
 import { ensureScreenshotDir } from "./screenshot";
-import { AudioRecorder, checkFfmpeg } from "./audio";
+import { AudioRecorder, checkFfmpeg, resolveMicDevice } from "./audio";
 import * as path from "path";
 
 export async function capture(options: CaptureOptions): Promise<void> {
-  const { url, name, outputDir, debug, audio } = options;
+  const { url, name, outputDir, debug, audio, mic } = options;
   const flowDir = path.join(outputDir, name);
 
   await ensureScreenshotDir(flowDir);
 
   let audioRecorder: AudioRecorder | null = null;
   let audioWanted = audio;
+  let resolvedMic: { index: number; name: string } | null = null;
   if (audioWanted) {
     const check = checkFfmpeg();
     if (!check.ok) {
       console.warn(`\n⚠ Audio recording disabled: ${check.reason}.`);
       console.warn(`  Install ffmpeg (e.g. \`brew install ffmpeg\`) and rerun without --no-audio to enable narration.`);
       audioWanted = false;
+    } else {
+      try {
+        resolvedMic = resolveMicDevice(mic);
+        console.log(`\n🎙  Audio input: ${resolvedMic.name} (avfoundation device ${resolvedMic.index})`);
+      } catch (err) {
+        console.warn(`\n⚠ ${(err as Error).message}`);
+        console.warn(`  Continuing without audio.`);
+        audioWanted = false;
+      }
     }
   }
 
@@ -133,11 +143,11 @@ export async function capture(options: CaptureOptions): Promise<void> {
     });
   });
 
-  if (audioWanted) {
-    audioRecorder = new AudioRecorder({ outputDir: flowDir });
+  if (audioWanted && resolvedMic) {
+    audioRecorder = new AudioRecorder({ outputDir: flowDir, deviceIndex: resolvedMic.index });
     try {
       await audioRecorder.start();
-      console.log("🎙  Audio recording started.");
+      console.log(`🎙  Audio recording started (${resolvedMic.name}).`);
     } catch (err) {
       console.warn(`⚠ Audio recording failed to start: ${(err as Error).message}`);
       console.warn(`  Continuing without audio.`);

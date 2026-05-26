@@ -6,12 +6,14 @@ const MASTER_FILENAME = "recording.webm";
 
 export interface AudioRecorderOptions {
   outputDir: string;
+  deviceIndex: number;
 }
 
 export class AudioRecorder {
   private outputDir: string;
   private audioDir: string;
   private masterPath: string;
+  private deviceIndex: number;
   private proc: ChildProcess | null = null;
   private startedAtMs = 0;
   private stoppedAtMs = 0;
@@ -21,6 +23,7 @@ export class AudioRecorder {
     this.outputDir = opts.outputDir;
     this.audioDir = path.join(this.outputDir, "audio");
     this.masterPath = path.join(this.audioDir, MASTER_FILENAME);
+    this.deviceIndex = opts.deviceIndex;
   }
 
   async start(): Promise<void> {
@@ -32,11 +35,14 @@ export class AudioRecorder {
     const args = [
       "-hide_banner",
       "-loglevel", "error",
+      "-thread_queue_size", "4096",
       "-f", "avfoundation",
-      "-i", ":0",
+      "-i", `:${this.deviceIndex}`,
       "-ac", "1",
-      "-ar", "16000",
+      "-ar", "48000",
       "-c:a", "libopus",
+      "-b:a", "96k",
+      "-application", "voip",
       "-y",
       this.masterPath,
     ];
@@ -128,6 +134,8 @@ export class AudioRecorder {
         "-ss", startSec.toFixed(3),
         "-to", endSec.toFixed(3),
         "-c:a", "libopus",
+        "-b:a", "96k",
+        "-application", "voip",
         fullPath,
       ];
 
@@ -156,4 +164,110 @@ export function checkFfmpeg(): { ok: boolean; reason?: string } {
     return { ok: false, reason: `ffmpeg returned non-zero exit (${r.status})` };
   }
   return { ok: true };
+}
+
+export function listAvfoundationAudioDevices(): string[] {
+  const r = spawnSync(
+    "ffmpeg",
+    ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+    { encoding: "utf-8" },
+  );
+  const out = (r.stderr ?? "") + (r.stdout ?? "");
+  const devices: string[] = [];
+  let inAudioSection = false;
+  for (const raw of out.split("\n")) {
+    const line = raw.trim();
+    if (line.includes("AVFoundation audio devices:")) {
+      inAudioSection = true;
+      continue;
+    }
+    if (!inAudioSection) continue;
+    const m = line.match(/^\[AVFoundation indev @ [^\]]+\]\s+\[(\d+)\]\s+(.+)$/);
+    if (m) {
+      const idx = parseInt(m[1], 10);
+      devices[idx] = m[2].trim();
+    }
+  }
+  return devices;
+}
+
+export function detectSystemDefaultInputName(): string | null {
+  const r = spawnSync("system_profiler", ["SPAudioDataType"], { encoding: "utf-8" });
+  if (r.status !== 0 || !r.stdout) return null;
+  const lines = r.stdout.split("\n");
+  let currentDevice: string | null = null;
+  for (const raw of lines) {
+    const deviceMatch = raw.match(/^\s{8}(\S.*?):\s*$/);
+    if (deviceMatch) {
+      currentDevice = deviceMatch[1].trim();
+      continue;
+    }
+    if (/Default Input Device:\s*Yes/i.test(raw) && currentDevice) {
+      return currentDevice;
+    }
+  }
+  return null;
+}
+
+export interface ResolvedMic {
+  index: number;
+  name: string;
+}
+
+export function resolveMicDevice(micArg?: string): ResolvedMic {
+  const devices = listAvfoundationAudioDevices();
+  if (devices.length === 0) {
+    throw new Error("No audio input devices found by avfoundation.");
+  }
+
+  // Explicit override
+  if (micArg) {
+    if (/^\d+$/.test(micArg)) {
+      const idx = parseInt(micArg, 10);
+      if (!devices[idx]) {
+        throw new Error(formatDeviceListError(`No avfoundation audio device at index ${idx}.`, devices));
+      }
+      return { index: idx, name: devices[idx] };
+    }
+    const needle = micArg.toLowerCase();
+    const idx = devices.findIndex((d) => d && d.toLowerCase().includes(needle));
+    if (idx === -1) {
+      throw new Error(formatDeviceListError(`No avfoundation audio device matching "${micArg}".`, devices));
+    }
+    return { index: idx, name: devices[idx] };
+  }
+
+  // System default
+  const defaultName = detectSystemDefaultInputName();
+  if (defaultName) {
+    const lower = defaultName.toLowerCase();
+    const idx = devices.findIndex(
+      (d) =>
+        d &&
+        (d.toLowerCase() === lower ||
+          d.toLowerCase().includes(lower) ||
+          lower.includes(d.toLowerCase())),
+    );
+    if (idx !== -1) {
+      return { index: idx, name: devices[idx] };
+    }
+  }
+
+  // Heuristic fallback: prefer the built-in mic over Continuity / virtual devices
+  const preferred = ["MacBook Pro Microphone", "MacBook Air Microphone", "Built-in Microphone"];
+  for (const candidate of preferred) {
+    const idx = devices.findIndex((d) => d === candidate);
+    if (idx !== -1) return { index: idx, name: devices[idx] };
+  }
+
+  // Last resort: device 0
+  return { index: 0, name: devices[0] ?? "device 0" };
+}
+
+function formatDeviceListError(prefix: string, devices: string[]): string {
+  const list = devices
+    .map((d, i) => (d ? `  [${i}] ${d}` : null))
+    .filter((s): s is string => s !== null)
+    .join("\n");
+  return `${prefix}\nAvailable audio input devices:\n${list}`;
 }

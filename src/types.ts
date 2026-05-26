@@ -4,6 +4,7 @@ export interface CaptureOptions {
   outputDir: string;
   debug: boolean;
   audio: boolean;
+  mic?: string;
 }
 
 export type ActionType = "click" | "input" | "navigation" | "start";

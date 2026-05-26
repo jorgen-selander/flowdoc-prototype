@@ -37,6 +37,7 @@ program
   .option("--output <dir>", "Output directory", "flowdocs")
   .option("--debug", "Also output raw-events.json for debugging")
   .option("--no-audio", "Skip microphone narration recording (audio is on by default)")
+  .option("--mic <name-or-index>", "Audio input device (substring of avfoundation device name, or numeric index). Default: macOS system default input.")
   .action(async (opts) => {
     await capture({
       url: opts.url,
@@ -44,6 +45,7 @@ program
       outputDir: opts.output,
       debug: opts.debug || false,
       audio: opts.audio !== false,
+      mic: opts.mic,
     });
   });
 
