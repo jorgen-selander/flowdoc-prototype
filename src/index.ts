@@ -154,4 +154,8 @@ program
     await runUi(repoRoot);
   });
 
-program.parse();
+// Always parse with node semantics (argv = [execPath, script, ...args]). Without this,
+// commander auto-detects process.versions.electron — which is set even when the Electron
+// binary runs as plain Node (ELECTRON_RUN_AS_NODE=1, how the desktop app spawns the CLI) —
+// and mis-slices argv, treating the script path as the command.
+program.parse(process.argv, { from: "node" });

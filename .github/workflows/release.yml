@@ -1,0 +1,46 @@
+name: Release desktop app
+
+# Publishes a signed + notarized macOS build to GitHub Releases on a version tag.
+# Update workflow: bump "version" in package.json, then `git tag vX.Y.Z && git push --tags`.
+# Users' installed apps pick up the new version on next launch (electron-updater).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create/upload the GitHub Release
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Bundle Chromium for packaging
+        run: npm run pw:bundle
+
+      - name: Build, sign, notarize, and publish
+        env:
+          # Code signing (Developer ID Application cert exported as base64 .p12).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Notarization via notarytool.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Publishing to GitHub Releases.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish always

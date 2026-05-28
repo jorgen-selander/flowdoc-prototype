@@ -4,6 +4,12 @@ import * as path from "path";
 
 const MASTER_FILENAME = "recording.webm";
 
+// In a packaged Electron app there is no ffmpeg on PATH; the desktop shell bundles
+// ffmpeg-static and points FLOWDOC_FFMPEG at it. The CLI falls back to PATH ffmpeg.
+function ffmpegBin(): string {
+  return process.env.FLOWDOC_FFMPEG || "ffmpeg";
+}
+
 export interface AudioRecorderOptions {
   outputDir: string;
   deviceIndex: number;
@@ -48,7 +54,7 @@ export class AudioRecorder {
       this.masterPath,
     ];
 
-    this.proc = spawn("ffmpeg", args, { stdio: ["pipe", "ignore", "pipe"] });
+    this.proc = spawn(ffmpegBin(), args, { stdio: ["pipe", "ignore", "pipe"] });
     this.startedAtMs = Date.now();
 
     let stderrTail = "";
@@ -156,7 +162,7 @@ export class AudioRecorder {
         fullPath,
       ];
 
-      const r = spawnSync("ffmpeg", sliceArgs, { encoding: "utf-8" });
+      const r = spawnSync(ffmpegBin(), sliceArgs, { encoding: "utf-8" });
       if (r.status !== 0) {
         console.warn(
           `  ⚠ failed to slice audio for step ${range.stepIndex}: ${r.stderr?.slice(0, 200)}`,
@@ -173,7 +179,7 @@ export class AudioRecorder {
 }
 
 export function checkFfmpeg(): { ok: boolean; reason?: string } {
-  const r = spawnSync("ffmpeg", ["-version"], { encoding: "utf-8" });
+  const r = spawnSync(ffmpegBin(), ["-version"], { encoding: "utf-8" });
   if (r.error) {
     return { ok: false, reason: "ffmpeg not found on PATH" };
   }
@@ -185,7 +191,7 @@ export function checkFfmpeg(): { ok: boolean; reason?: string } {
 
 export function listAvfoundationAudioDevices(): string[] {
   const r = spawnSync(
-    "ffmpeg",
+    ffmpegBin(),
     ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
     { encoding: "utf-8" },
   );
