@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Capture browser workflows and generate Markdown documentation with screenshots",
   "main": "electron/main.js",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "whisper:build": "cd node_modules/nodejs-whisper/cpp/whisper.cpp && cmake -B build -DWHISPER_BUILD_TESTS=OFF -DGGML_METAL=ON && cmake --build build --config Release -j",
+    "whisper:build": "cd node_modules/nodejs-whisper/cpp/whisper.cpp && cmake -B build -DWHISPER_BUILD_TESTS=OFF -DGGML_METAL=ON -DBUILD_SHARED_LIBS=OFF && cmake --build build --config Release -j --target whisper-cli",
     "postinstall": "npx playwright install chromium && npm run whisper:build",
     "app": "npm run build && electron .",
     "pw:bundle": "PLAYWRIGHT_BROWSERS_PATH=\"$PWD/pw-browsers\" npx playwright install chromium",
