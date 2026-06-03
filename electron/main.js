@@ -9,7 +9,9 @@
 //   appRoot  — where dist/index.js lives (read-only app bundle when packaged)
 //   dataRoot — where flows are written/served (Electron userData; survives app updates)
 
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell } = require("electron");
+const fs = require("fs");
+const https = require("https");
 const path = require("path");
 
 // electron/main.js sits one level under the app root in both dev and a packaged
@@ -77,15 +79,178 @@ async function boot() {
   });
 
   createWindow();
+  setupMenu();
 
   if (app.isPackaged) {
-    try {
-      const { autoUpdater } = require("electron-updater");
-      autoUpdater.checkForUpdatesAndNotify();
-    } catch (err) {
-      console.error("auto-update check failed:", err);
-    }
+    setupAutoUpdate();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update UX
+//
+// Replaces the previous silent checkForUpdatesAndNotify(). When a new release
+// is detected, show a native macOS dialog with release notes (fetched from the
+// GitHub release body) and explicit Install / Later / Skip buttons. Also adds
+// a "Check for Updates…" menu item under the FlowDoc app menu for manual checks.
+// ---------------------------------------------------------------------------
+
+let manualCheck = false;
+const skipPath = () => path.join(app.getPath("userData"), "skipped-update.json");
+
+function getSkippedVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(skipPath(), "utf-8")).version;
+  } catch {
+    return null;
+  }
+}
+
+function setSkippedVersion(version) {
+  try {
+    fs.writeFileSync(skipPath(), JSON.stringify({ version }));
+  } catch (err) {
+    console.error("could not persist skipped version:", err.message);
+  }
+}
+
+function fetchReleaseNotes(tag) {
+  return new Promise((resolve) => {
+    const req = https.get(
+      `https://api.github.com/repos/jorgen-selander/flowdoc-prototype/releases/tags/${tag}`,
+      { headers: { "User-Agent": "FlowDoc", Accept: "application/vnd.github+json" } },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          try {
+            const data = JSON.parse(body);
+            resolve((data.body || "").trim());
+          } catch {
+            resolve("");
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve(""));
+    req.setTimeout(5000, () => {
+      req.destroy();
+      resolve("");
+    });
+  });
+}
+
+async function showUpdateDialog(info) {
+  // Honor a previous "Skip This Version" choice — unless this was a manual check.
+  const wasManual = manualCheck;
+  manualCheck = false;
+  if (!wasManual && info.version === getSkippedVersion()) return;
+
+  const notes = (await fetchReleaseNotes(`v${info.version}`)).slice(0, 800);
+  const detail = notes
+    ? `Release notes:\n\n${notes}`
+    : `Version ${info.version} is available.`;
+  const result = await dialog.showMessageBox({
+    type: "info",
+    title: "Update Available",
+    message: `FlowDoc ${info.version} is available — you have ${app.getVersion()}.`,
+    detail,
+    buttons: ["Install and Restart", "Later", "Skip This Version"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+
+  if (result.response === 0) {
+    // Restart immediately — but only after the download finishes.
+    // electron-updater downloads automatically; quitAndInstall blocks until ready.
+    const { autoUpdater } = require("electron-updater");
+    autoUpdater.once("update-downloaded", () => autoUpdater.quitAndInstall());
+    // If the update was already downloaded when the dialog showed, this fires now;
+    // otherwise it'll trigger when download finishes.
+  } else if (result.response === 2) {
+    setSkippedVersion(info.version);
+  }
+  // response === 1 (Later) → next launch will see it again.
+}
+
+function setupAutoUpdate() {
+  let autoUpdater;
+  try {
+    autoUpdater = require("electron-updater").autoUpdater;
+  } catch (err) {
+    console.error("electron-updater not available:", err.message);
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.on("update-available", (info) => {
+    showUpdateDialog(info).catch((err) => console.error("update dialog failed:", err));
+  });
+  autoUpdater.on("update-not-available", () => {
+    if (manualCheck) {
+      manualCheck = false;
+      dialog.showMessageBox({
+        type: "info",
+        title: "FlowDoc",
+        message: "FlowDoc is up to date.",
+        detail: `You're on version ${app.getVersion()}.`,
+        buttons: ["OK"],
+      });
+    }
+  });
+  autoUpdater.on("error", (err) => {
+    console.error("[auto-updater]", err.message);
+    if (manualCheck) {
+      manualCheck = false;
+      dialog.showMessageBox({
+        type: "warning",
+        title: "Update Check Failed",
+        message: "Could not check for updates.",
+        detail: err.message,
+        buttons: ["OK"],
+      });
+    }
+  });
+
+  // Background check on launch.
+  autoUpdater.checkForUpdates().catch((err) => console.error("update check failed:", err.message));
+}
+
+function setupMenu() {
+  // macOS replaces the first menu's label with the app name, so this becomes "FlowDoc".
+  const template = [
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        {
+          label: "Check for Updates…",
+          enabled: app.isPackaged,
+          click: () => {
+            try {
+              const { autoUpdater } = require("electron-updater");
+              manualCheck = true;
+              autoUpdater.checkForUpdates().catch(() => {});
+            } catch {
+              // electron-updater missing — nothing to do.
+            }
+          },
+        },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 app.whenReady()
