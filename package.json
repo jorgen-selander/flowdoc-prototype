@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Capture browser workflows and generate Markdown documentation with screenshots",
   "main": "electron/main.js",
   "bin": {
@@ -63,7 +63,10 @@
       }
     },
     "publish": {
-      "provider": "github"
+      "provider": "github",
+      "owner": "jorgen-selander",
+      "repo": "flowdoc-prototype",
+      "releaseType": "release"
     }
   }
 }
