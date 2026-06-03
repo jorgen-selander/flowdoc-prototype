@@ -16,6 +16,10 @@
   "keywords": ["documentation", "browser", "workflow", "playwright", "screenshots"],
   "author": "Jörgen Selander <jorgen.selander@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jorgen-selander/flowdoc-prototype.git"
+  },
   "dependencies": {
     "commander": "^12.1.0",
     "electron-updater": "^6.3.9",
@@ -51,6 +55,7 @@
       "category": "public.app-category.developer-tools",
       "target": "dmg",
       "hardenedRuntime": true,
+      "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
