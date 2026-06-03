@@ -54,6 +54,22 @@ async function boot() {
     process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, "pw-browsers");
   }
 
+  // Bundled whisper.cpp (compiled during npm install). The binary lives inside
+  // node_modules/nodejs-whisper, which ships in the .app via electron-builder's normal
+  // node_modules sweep. The model is NOT bundled — downloaded to userData on first
+  // transcribe so app updates stay small and the model survives auto-updates.
+  process.env.FLOWDOC_WHISPER_BIN = path.join(
+    appRoot,
+    "node_modules",
+    "nodejs-whisper",
+    "cpp",
+    "whisper.cpp",
+    "build",
+    "bin",
+    "whisper-cli",
+  );
+  process.env.FLOWDOC_WHISPER_MODEL_DIR = path.join(app.getPath("userData"), "whisper-model");
+
   const { startServer } = require(path.join(appRoot, "dist", "ui-server"));
   server = await startServer({
     appRoot,
