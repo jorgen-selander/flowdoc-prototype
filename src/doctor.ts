@@ -40,7 +40,13 @@ export async function runDoctor(repoRoot: string): Promise<number> {
   results.push(checkMic());
   results.push(checkWhisper(repoRoot));
   results.push(await checkPlaywright());
-  results.push(checkMiroToken());
+  // The MIRO_ACCESS_TOKEN env-var check is useful for `flowdoc miro` from the
+  // CLI, but irrelevant in the desktop app — the token is set via the in-app
+  // field. process.versions.electron is set whenever this CLI is invoked as
+  // a child of the Electron shell (via ELECTRON_RUN_AS_NODE).
+  if (!process.versions.electron) {
+    results.push(checkMiroToken());
+  }
 
   const labelWidth = Math.max(...results.map((r) => r.name.length));
   console.log("");
