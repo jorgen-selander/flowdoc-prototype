@@ -18,11 +18,15 @@ import { generateSite } from "./site";
 // binary is found relative to dist/ — i.e. in node_modules/nodejs-whisper.
 // ---------------------------------------------------------------------------
 
-// "small" is the v2 default: ~500MB download, multilingual, decent Swedish.
-const WHISPER_MODEL = "small";
-const WHISPER_MODEL_FILE = "ggml-small.bin";
-const WHISPER_MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_MODEL_FILE}`;
-const WHISPER_MODEL_EXPECTED_SIZE_MB = 500;
+// KB-Whisper-medium Q5_0: ~510 MB download, Swedish-tuned (KBLab/kb-whisper-medium),
+// 5-bit quantized for ~3× smaller download with negligible WER cost. The Swedish-tuned
+// medium gives much better accuracy than the multilingual `small` we shipped with in
+// v2's first pass while keeping first-run download in the same 500 MB ballpark.
+const WHISPER_MODEL_DISPLAY = "kb-whisper-medium-q5_0";
+const WHISPER_MODEL_FILE = "kb-whisper-medium-q5_0.bin";
+const WHISPER_MODEL_URL =
+  "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model-q5_0.bin";
+const WHISPER_MODEL_EXPECTED_SIZE_MB = 510;
 
 function ffmpegBin(): string {
   return process.env.FLOWDOC_FFMPEG || "ffmpeg";
@@ -68,6 +72,22 @@ async function ensureModel(): Promise<void> {
   await fs.promises.mkdir(modelDir(), { recursive: true });
   const tmp = target + ".part";
   if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+
+  // One-time cleanup: remove any stale model files left over from a previous
+  // FlowDoc version (e.g. ggml-small.bin from v1.0.4–v1.0.6). They're useless
+  // once we've switched the default model and just waste ~500 MB of disk.
+  try {
+    for (const entry of fs.readdirSync(modelDir())) {
+      if (entry !== WHISPER_MODEL_FILE && entry.endsWith(".bin")) {
+        const old = path.join(modelDir(), entry);
+        const sizeMB = (fs.statSync(old).size / 1_048_576).toFixed(0);
+        fs.unlinkSync(old);
+        console.log(`  Removed stale model: ${entry} (reclaimed ${sizeMB} MB).`);
+      }
+    }
+  } catch {
+    // Best effort — never block a download on cleanup.
+  }
 
   console.log(
     `Downloading transcription model (~${WHISPER_MODEL_EXPECTED_SIZE_MB} MB, one-time, do not quit)...`,
@@ -263,7 +283,7 @@ export async function transcribeFlow(opts: TranscribeOptions): Promise<void> {
 
   await ensureModel();
 
-  console.log(`Transcribing ${pending.length} step(s) with whisper-${WHISPER_MODEL} (Swedish)...`);
+  console.log(`Transcribing ${pending.length} step(s) with ${WHISPER_MODEL_DISPLAY} (Swedish)...`);
 
   const tempWavs: string[] = [];
   try {

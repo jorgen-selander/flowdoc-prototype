@@ -160,7 +160,7 @@ function checkWhisper(repoRoot: string): CheckResult {
   const modelDir =
     process.env.FLOWDOC_WHISPER_MODEL_DIR ||
     path.join(os.homedir(), "Library", "Application Support", "flowdoc", "whisper-model");
-  const modelFile = path.join(modelDir, "ggml-small.bin");
+  const modelFile = path.join(modelDir, "kb-whisper-medium-q5_0.bin");
   const modelReady = fs.existsSync(modelFile) && fs.statSync(modelFile).size > 100_000_000;
   return {
     name: "Whisper (transcription)",
