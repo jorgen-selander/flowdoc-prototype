@@ -1,6 +1,6 @@
 {
   "name": "flowdoc",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Capture browser workflows and generate Markdown documentation with screenshots",
   "main": "electron/main.js",
   "bin": {

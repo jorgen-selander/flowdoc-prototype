@@ -61,7 +61,65 @@ function modelPath(): string {
 
 // ---------------------------------------------------------------------------
 // Model download (first run only — idempotent on subsequent calls)
+//
+// While the model is downloading we emit a progress line + a rotating waiting
+// message every 5 seconds. Messages alternate onboarding tip → zen → tip →
+// zen so the user has something to read instead of staring at a percentage.
 // ---------------------------------------------------------------------------
+
+const ONBOARDING_TIPS = [
+  "Tip: Speak naturally during capture — Whisper handles pauses and \"um\"s gracefully.",
+  "Tip: Re-run Transcribe any time — finished steps are skipped automatically.",
+  "Tip: 'Site' regenerates the HTML view from your existing audio + screenshots, no re-capture needed.",
+  "Tip: Pushing to Miro? Paste your token directly in the Miro section — no env vars required.",
+  "Tip: 'Doctor' shows every dependency check on one screen. Handy after every update.",
+  "Tip: Flows live in ~/Library/Application Support/flowdoc/flowdocs and survive every app update.",
+  "Tip: Stop a capture with the Stop button — the browser window can stay open after.",
+];
+
+const ZEN_SAYINGS = [
+  "Before transcribing, chop wood. After transcribing, carry water.",
+  "What is the sound of one bit downloading?",
+  "The obstacle is the bandwidth.",
+  "Empty your cache. Be formless, shapeless, like ggml.",
+  "Sitting silently, doing nothing, spring comes, and the model loads itself.",
+  "When you reach the top of the queue, keep waiting.",
+  "The journey of a thousand transcripts begins with a single Stop click.",
+];
+
+function formatBytes(b: number): string {
+  return `${(b / 1_048_576).toFixed(0)} MB`;
+}
+
+function formatProgress(received: number, total: number, elapsedSec: number): string {
+  if (total === 0) {
+    return `   ${formatBytes(received)} downloaded`;
+  }
+  const pct = Math.floor((received / total) * 100);
+  const rateMBs =
+    elapsedSec > 0.5 ? `${(received / 1_048_576 / elapsedSec).toFixed(1)} MB/s` : "— MB/s";
+  let etaStr = "— left";
+  if (elapsedSec > 1 && received > 0 && received < total) {
+    const etaSec = Math.ceil(((total - received) / received) * elapsedSec);
+    if (etaSec >= 60) {
+      etaStr = `~${Math.floor(etaSec / 60)}m ${(etaSec % 60).toString().padStart(2, "0")}s left`;
+    } else {
+      etaStr = `~${etaSec}s left`;
+    }
+  } else if (received >= total && total > 0) {
+    etaStr = "done";
+  }
+  return `   ${pct}%  ·  ${formatBytes(received)} / ${formatBytes(total)}  ·  ${rateMBs}  ·  ${etaStr}`;
+}
+
+function nextWaitMessage(emitCount: number): string {
+  const useZen = emitCount % 2 === 1;
+  const pairIdx = Math.floor(emitCount / 2);
+  if (useZen) {
+    return ZEN_SAYINGS[pairIdx % ZEN_SAYINGS.length];
+  }
+  return ONBOARDING_TIPS[pairIdx % ONBOARDING_TIPS.length];
+}
 
 async function ensureModel(): Promise<void> {
   const target = modelPath();
@@ -97,7 +155,10 @@ async function ensureModel(): Promise<void> {
     const file = fs.createWriteStream(tmp);
     let received = 0;
     let total = 0;
-    let lastLogged = 0;
+    const startMs = Date.now();
+    let lastEmitMs = startMs;
+    let emitCount = 0;
+    const EMIT_INTERVAL_MS = 5000;
     const get = (url: string): void => {
       https
         .get(url, (res) => {
@@ -120,17 +181,22 @@ async function ensureModel(): Promise<void> {
           total = parseInt(res.headers["content-length"] || "0", 10);
           res.on("data", (chunk: Buffer) => {
             received += chunk.length;
-            // Log every ~10%, but only if we know the total.
-            if (total > 0) {
-              const pct = Math.floor((received / total) * 10) * 10;
-              if (pct > lastLogged) {
-                lastLogged = pct;
-                console.log(`  ...${pct}% (${(received / 1_048_576).toFixed(0)} MB)`);
-              }
+            const now = Date.now();
+            if (now - lastEmitMs >= EMIT_INTERVAL_MS) {
+              lastEmitMs = now;
+              const elapsedSec = (now - startMs) / 1000;
+              console.log(formatProgress(received, total, elapsedSec));
+              console.log(`   ${nextWaitMessage(emitCount)}`);
+              emitCount++;
             }
           });
           res.pipe(file);
-          file.on("finish", () => file.close(() => resolve()));
+          file.on("finish", () => {
+            // Final 100% line so the user sees the download actually finish.
+            const elapsedSec = (Date.now() - startMs) / 1000;
+            console.log(formatProgress(received, total, elapsedSec));
+            file.close(() => resolve());
+          });
         })
         .on("error", reject);
     };
