@@ -535,6 +535,135 @@ I never figured out the root cause inside Playwright's IPC. But I didn't need to
 
 ---
 
+## Session 15: Desktop app and signed auto-update (v1.0.x)
+
+**Time:** elapsed across roughly a week (2026-05-28 → 2026-06-04)
+**Duration:** ~12 hours of focused dev, interleaved with multi-hour waits for Apple notarization and CI builds
+**Commits:** `e18e364` … `f9f759e` (on a `desktop-app` branch; `main` left as the v0.10 CLI as a fallback)
+
+This session is its own act. v0.10 ended with a fully working CLI you could hand to a colleague who knew their way around a terminal. The trigger for this session was the opposite: I gave the v0.10 build to a real test user — someone who had never opened a terminal — and they could not get past the install chain (Node, ffmpeg, Python venv, torch, KB-Whisper-large 3 GB, Playwright Chromium). The actual goal became *no terminal, no Python, no manual installs.*
+
+Initial framing of the answer was "host it as a web app with logins." We backed off that quickly during planning — logins were a proxy for the real requirement (zero install), and a hosted browser can't drive *another* browser through Unikum or record the user's mic. A packaged Mac app was the right shape.
+
+### Architecture: the desktop app *is* the CLI
+
+The smallest possible Electron shell. It boots the same HTTP+SSE server that `flowdoc ui` runs and loads it in a BrowserWindow. The server spawns the compiled `dist/index.js` as a child for every subcommand — same pattern as the CLI. One change to support this: `runUi(repoRoot)` extracted into an embeddable `startServer({ appRoot, dataRoot })`.
+
+The two roots really matter:
+- **appRoot**: where `dist/index.js` lives — inside `.app/Contents/Resources/app` when packaged, read-only.
+- **dataRoot**: where flows are written and served from — `app.getPath('userData')`, writable, survives auto-updates.
+
+The app *is* the CLI: a fix in `src/capture.ts` or `src/site.ts` reaches both at once. `main` stays as the v0.10 CLI; the desktop app lives on a `desktop-app` branch.
+
+### The commander argv bug, caught by a non-GUI spike
+
+Before any UI polish, I smoke-tested the spawn pipeline by running the embedded server *under* Electron-as-Node (`ELECTRON_RUN_AS_NODE=1`) and POSTing `command=doctor` to `/api/start`. Inside the doctor child it returned `error: unknown command '/path/dist/index.js'`.
+
+Diagnosis: commander auto-detects `process.versions.electron` — which is set even when the Electron binary runs as plain Node — and slices `argv` by 1 instead of 2, so it treated `dist/index.js` as the user-supplied command. Every packaged CLI invocation would have silently broken.
+
+Fix:
+
+```ts
+program.parse(process.argv, { from: "node" });
+```
+
+Caught early thanks to spending an hour on the non-GUI spike rather than the full sign + package + run loop.
+
+### Signing + notarization: the part you only learn by doing
+
+Genuine time sink, and the part the original plan was most optimistic about. Lessons:
+
+- **Xcode's certificate dropdown doesn't list "Developer ID Application"** any more. Created via developer.apple.com instead, with a CSR generated in Keychain Access.
+- **Sign with a personal Apple Developer account, not the work team.** I started in the Unikum team and realised the signed binary would identify as Unikum (an internal tool for Unikum demos is fine; surprise-distributing a binary as Unikum is not).
+- **`security find-identity -v -p codesigning` returned 0 valid identities** even after the cert showed up in Keychain Access → login → My Certificates. Keychain Access marked it "not trusted." Diagnosis: the Apple Developer ID G2 intermediate CA isn't built into all macOS roots. Fixed by fetching `https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer` and importing — identity went green immediately.
+- **First notarization can take hours.** Unofficial Apple behaviour: the first submission from a new Developer account goes through extended review. Ours stayed `In Progress` for over an hour, eventually cleared overnight. Subsequent submissions: 1–5 minutes. Worth knowing before you assume something is wrong with the submission.
+
+### The silent auto-update bug
+
+After v1.0.0 finally landed, I tagged v1.0.1 to test the round-trip. The installed v1.0.0 launched, never detected the new version. Updater cache empty. No outbound GitHub connections from the process. Nothing in macOS unified log.
+
+The key fact: **macOS unified log does not capture Electron stdout** unless the app uses OSLog explicitly. Ours doesn't. So electron-updater can be screaming errors and you'd never see them from the GUI side.
+
+I killed the running FlowDoc and relaunched from terminal with stdout redirected:
+
+```bash
+nohup /Applications/FlowDoc.app/Contents/MacOS/FlowDoc > /tmp/flowdoc-stdout.log 2>&1 &
+```
+
+Immediately:
+
+```
+Error: ZIP file not provided
+```
+
+Root cause: electron-updater on macOS applies in-place updates by *unpacking a `.zip`*, not a `.dmg`. The DMG is the first-run installer. We had `"target": "dmg"` only, so `latest-mac.yml` referenced just that, and the updater silently rejected it.
+
+Fix in v1.0.2: `"target": ["dmg", "zip"]`. v1.0.0 → v1.0.2 auto-update round-trip then worked first try.
+
+The general lesson worth carrying forward: **when an Electron app misbehaves and the GUI gives you nothing, relaunch it from terminal with stdout captured.** The OS log won't help.
+
+### CI release pipeline
+
+`.github/workflows/release.yml` triggers on every `v*` tag: build, sign, notarize, publish a non-draft GitHub Release with both DMG and ZIP plus `latest-mac.yml`. Five repo secrets:
+
+| Secret | What |
+|---|---|
+| `CSC_LINK` | base64 of the `.p12` exported from Keychain Access |
+| `CSC_KEY_PASSWORD` | the `.p12` export password |
+| `APPLE_ID` | Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | from account.apple.com — revocable, scoped, regenerated per release |
+| `APPLE_TEAM_ID` | 10-char team identifier |
+
+`publish.releaseType: "release"` added in v1.0.1 to skip electron-builder's draft default — drafts aren't visible to the auto-updater. The dev workflow from v1.0.2 onwards: bump `version`, `git tag vX.Y.Z`, `git push --tags`, done.
+
+### v1.0.4: drop Python entirely, swap to whisper.cpp
+
+The original v2 plan landed here. The v1.0.3 desktop app shipped with a Transcribe button that errored on every machine without a Python venv — the deferred work surfacing exactly as predicted.
+
+Used the `nodejs-whisper` npm package for its bundled whisper.cpp source + cmake build, but invoked the compiled binary directly rather than the package's API. The library has hidden gotchas: it calls `ffmpeg` from PATH (not our bundled `FLOWDOC_FFMPEG`) and mutates `process.cwd()` via shelljs in its model-download path. Bypassing the API and shelling out to the compiled binary ourselves sidesteps both.
+
+First packaged build failed with `ENOENT: no such file or directory, ensureSymlink 'libwhisper.1.dylib'` — electron-builder choked on whisper.cpp's dylib symlinks. Fix: `-DBUILD_SHARED_LIBS=OFF` produces a static binary with no dylibs.
+
+CMake build has to happen during `npm install` postinstall, not lazily at first transcribe — `node_modules` is read-only inside the packaged app, so a runtime cmake invocation has nowhere to write. macos-14 CI runners have cmake pre-installed; dev machines need `brew install cmake`.
+
+Removed in the same release: `scripts/transcribe.py`, `src/python.ts`, `requirements.txt`. Doctor lost the Python / venv / transformers checks and gained a `whisper-cli` binary check.
+
+Model: initially the multilingual `small` (~500 MB, simplest first move). Replaced with `kb-whisper-medium-q5_0` in v1.0.7 once it became clear the multilingual model produced gibberish on Swedish-specific vocabulary ("skömposter" for the actual word "schemaposter"). The KBLab Q5_0-quantized medium is the same ~500 MB download but Swedish-tuned, with negligible quality cost from quantization.
+
+### v1.0.5: a real update dialog (instead of "did anything happen?")
+
+`checkForUpdatesAndNotify()` worked but felt erratic — the only visible signal was a macOS notification, easy to miss, with no UI in between *we found something* and *restart to apply.* Replaced with explicit event handlers:
+
+- `update-available` → `dialog.showMessageBox` with release notes fetched from the GitHub release body via the public API. Buttons: **Install and Restart** / **Later** / **Skip This Version**.
+- `update-not-available` → silent on launch; on a manual check, shows *"FlowDoc is up to date."*
+- Skipped versions persist in `userData`; a manual menu check overrides skip.
+- New **Check for Updates…** menu item under the FlowDoc app menu.
+
+This was also the first time we set our own `Menu.setApplicationMenu`, which means including `{ role: "editMenu" }` etc. explicitly so cut/copy/paste shortcuts still work in text fields.
+
+### v1.0.6 → v1.0.8: polish
+
+- **v1.0.6**: doctor no longer surfaces the `MIRO_ACCESS_TOKEN` env-var warning inside the desktop app. The in-app token field is the right channel; the CLI-style `export …` fix hint was just noise. Detected via `process.versions.electron`.
+- **v1.0.7**: model swap to `kb-whisper-medium-q5_0` as above, plus auto-cleanup of stale model files in `userData` (so existing users reclaim the ~465 MB `ggml-small.bin`).
+- **v1.0.8**: live download UX. The previous "...10% (50 MB)" emits every ten-percent felt like a hang on a ~500 MB download. Now every 5 seconds we emit progress *and* a rotating message, alternating onboarding tip → zen koan → onboarding tip → zen koan:
+
+```
+   42%  ·  214 MB / 510 MB  ·  11.8 MB/s  ·  ~25s left
+   Tip: Re-run Transcribe any time — finished steps are skipped automatically.
+
+   50%  ·  255 MB / 510 MB  ·  11.6 MB/s  ·  ~22s left
+   The obstacle is the bandwidth.
+```
+
+### What surprised me
+
+- **The "desktop app *is* the CLI" architecture made the whole session shorter than I'd guessed.** The single biggest decision was treating the existing `flowdoc ui` server as the desktop app's backbone. Almost every "how do we…" question that came up — how does capture work, how does the audio path resolve, how do we serve the generated site, how do we drive a long-running subprocess — had been answered already by the CLI work in Sessions 1–14. The desktop app added a window, a signing pipeline, and ~30 MB of glue.
+- **Most of the hard time wasn't engineering, it was Apple.** First-notarization hours, hunting down the G2 intermediate trust issue, the "ZIP file not provided" silent failure — none of these are Electron-specific. They're macOS distribution-specific. The genuinely Electron-specific bug (commander mis-parsing argv) was caught in an hour by a non-GUI spike before it could hide.
+- **`nohup … > /tmp/log` is the single most useful Electron debugging recipe.** Worth remembering: the moment an Electron app misbehaves and the GUI shows nothing, relaunch it from terminal. The unified log will not save you.
+- **Quantized whisper models are absurdly good.** A 5-bit quantized KB-Whisper-medium delivers Swedish quality I'd have expected from full-precision medium, in the same ~500 MB download as the multilingual small that was producing nonsense. Modern model quantization is one of those quietly-revolutionary infrastructure things.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -555,13 +684,26 @@ I never figured out the root cause inside Playwright's IPC. But I didn't need to
 | v0.8 | `7c15e97` | `flowdoc doctor` + ONBOARDING.md + venv auto-detect for transcribe |
 | v0.9 | `20b83fd` | Local web UI (`flowdoc ui`) — one card per subcommand, live SSE log, two-step capture buttons; plus shutdown fixes for the bugs the UI exposed |
 | v0.10 | `0a14474` | Miro export uses Unikum brand palette + flowchart symbols; capture shutdown watchdog + fire-and-forget `browser.close()` |
+| — | `e18e364` | Electron desktop shell + embeddable server + auto-update wiring (on `desktop-app` branch) |
+| — | `ce5b3ff` | Release pipeline: `notarize: true`, repository field for publish target |
+| v1.0.0 | — | First signed + notarized release (first-notarization wait was hours) |
+| v1.0.1 | `9ed3881` | `publish.releaseType: "release"`, explicit owner/repo so installed apps know where to look |
+| v1.0.2 | `3146410` | `target: ["dmg", "zip"]` — fixes the silent auto-update failure on macOS |
+| v1.0.3 | `7230726` | Custom app icon via `iconutil` from a 1024×1024 PNG |
+| v1.0.4 | `4ed98f7`, `d6745ce` | whisper.cpp replaces Python + torch; remove `scripts/transcribe.py`, `src/python.ts`, `requirements.txt` |
+| v1.0.5 | `e598e81` | Native update dialog with release notes + Check for Updates menu item |
+| v1.0.6 | `b675b0c` | Hide `MIRO_ACCESS_TOKEN` env-var warning in the packaged app (CLI still shows it) |
+| v1.0.7 | `4986c2b` | Swap whisper model to KB-Whisper-medium Q5_0 (Swedish-tuned) + auto-cleanup of stale models |
+| v1.0.8 | `f9f759e` | Download UX: live speed + ETA + alternating onboarding tip / zen koan during the ~500 MB first-run download |
 
-**Total time:** ~7.5 hours from empty repo to a tool that records narrated browser workflows, transcribes them locally, publishes the result as a Miro board with brand-correct shapes AND a self-contained HTML site with inline audio playback, all driven by either CLI or a localhost web UI, with a one-command environment checker for new teammates.
+**Total time:**
+- **v0.1 → v0.10**: ~7.5 hours from empty repo to a narrated-workflow CLI with local Swedish transcription, Miro export, and a self-contained HTML site.
+- **v1.0.0 → v1.0.8**: ~12 hours of focused dev across roughly a week, taking that same CLI all the way to a signed, notarized, auto-updating Mac app that any non-technical user can install with one double-click. Notarization waits and CI runs added several hours of wall-clock idle.
 
 **Test sites used:**
 - mantus.ai — public SPA, validated click/navigation capture
 - demo.unikum.net — enterprise app with login, validated password masking, form inputs, and Miro export
 
-**Tools:** TypeScript, Playwright, Commander, Miro REST v2 (via global `fetch`). No AI APIs, no external services, no build tools beyond `tsc`.
+**Tools:** TypeScript, Playwright, Commander, Miro REST v2 (via global `fetch`). Desktop phase added Electron, electron-builder, electron-updater, ffmpeg-static, nodejs-whisper, cmake (system dep on dev/CI), GitHub Actions for the release pipeline. No third-party services beyond Apple's notary and GitHub Releases.
 
-**Process:** Planning with ChatGPT cross-check, implementation with Claude Code (Opus 4.6 → 4.7), manual browser testing between iterations. Each session was focused: plan → build → test → fix → commit.
+**Process:** Planning with ChatGPT cross-check, implementation with Claude Code (Opus 4.6 → 4.7), manual browser testing between iterations. Each session was focused: plan → build → test → fix → commit. The desktop phase added one more habit: **terminal-stdout debugging** for any Electron weirdness — the GUI tells you nothing and macOS unified log doesn't catch Electron stdout.
