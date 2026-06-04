@@ -1,23 +1,83 @@
 {
   "name": "flowdoc",
-  "version": "1.0.0",
+  "version": "1.0.8",
   "description": "Capture browser workflows and generate Markdown documentation with screenshots",
-  "main": "dist/index.js",
+  "main": "electron/main.js",
   "bin": {
     "flowdoc": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
-    "postinstall": "npx playwright install chromium"
+    "whisper:build": "cd node_modules/nodejs-whisper/cpp/whisper.cpp && cmake -B build -DWHISPER_BUILD_TESTS=OFF -DGGML_METAL=ON -DBUILD_SHARED_LIBS=OFF && cmake --build build --config Release -j --target whisper-cli",
+    "postinstall": "npx playwright install chromium && npm run whisper:build",
+    "app": "npm run build && electron .",
+    "pw:bundle": "PLAYWRIGHT_BROWSERS_PATH=\"$PWD/pw-browsers\" npx playwright install chromium",
+    "dist": "npm run build && npm run pw:bundle && electron-builder"
   },
-  "keywords": ["documentation", "browser", "workflow", "playwright", "screenshots"],
+  "keywords": [
+    "documentation",
+    "browser",
+    "workflow",
+    "playwright",
+    "screenshots"
+  ],
+  "author": "Jörgen Selander <jorgen.selander@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jorgen-selander/flowdoc-prototype.git"
+  },
   "dependencies": {
     "commander": "^12.1.0",
+    "electron-updater": "^6.3.9",
+    "ffmpeg-static": "^5.2.0",
+    "nodejs-whisper": "^0.3.0",
     "playwright": "^1.52.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.8.0"
+  },
+  "build": {
+    "appId": "com.flowdoc.desktop",
+    "productName": "FlowDoc",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "pw-browsers",
+        "to": "pw-browsers"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "FlowDoc records your microphone so it can narrate the workflow you capture."
+      }
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "jorgen-selander",
+      "repo": "flowdoc-prototype",
+      "releaseType": "release"
+    }
   }
 }

@@ -1,9 +1,9 @@
 import { spawnSync } from "child_process";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { chromium } from "playwright";
 import { checkFfmpeg, detectSystemDefaultInputName, resolveMicDevice } from "./audio";
-import { hasModule, pickPython, preferredPython, pythonVersion, repoPython } from "./python";
 
 type Status = "ok" | "warn" | "fail";
 
@@ -38,13 +38,15 @@ export async function runDoctor(repoRoot: string): Promise<number> {
   results.push(checkBuild(repoRoot));
   results.push(checkFfmpegStep());
   results.push(checkMic());
-  const py = checkPython();
-  results.push(py.result);
-  const venv = checkVenv(repoRoot);
-  results.push(venv.result);
-  results.push(checkPythonDeps(venv.python ?? py.python));
+  results.push(checkWhisper(repoRoot));
   results.push(await checkPlaywright());
-  results.push(checkMiroToken());
+  // The MIRO_ACCESS_TOKEN env-var check is useful for `flowdoc miro` from the
+  // CLI, but irrelevant in the desktop app — the token is set via the in-app
+  // field. process.versions.electron is set whenever this CLI is invoked as
+  // a child of the Electron shell (via ELECTRON_RUN_AS_NODE).
+  if (!process.versions.electron) {
+    results.push(checkMiroToken());
+  }
 
   const labelWidth = Math.max(...results.map((r) => r.name.length));
   console.log("");
@@ -134,80 +136,36 @@ function checkMic(): CheckResult {
   }
 }
 
-function checkPython(): { result: CheckResult; python: string | null } {
-  const py = pickPython();
-  if (!py) {
+function checkWhisper(repoRoot: string): CheckResult {
+  const binPath =
+    process.env.FLOWDOC_WHISPER_BIN ||
+    path.join(
+      repoRoot,
+      "node_modules",
+      "nodejs-whisper",
+      "cpp",
+      "whisper.cpp",
+      "build",
+      "bin",
+      "whisper-cli",
+    );
+  if (!fs.existsSync(binPath)) {
     return {
-      python: null,
-      result: {
-        name: "Python",
-        status: "fail",
-        value: "no python3 / python on PATH",
-        fix: "brew install python   (or install from https://www.python.org/downloads/)",
-      },
-    };
-  }
-  const version = pythonVersion(py);
-  return {
-    python: py,
-    result: {
-      name: "Python",
-      status: "ok",
-      value: `${py}${version ? ` (${version})` : ""}`,
-    },
-  };
-}
-
-function checkVenv(repoRoot: string): { result: CheckResult; python: string | null } {
-  const venvPy = repoPython(repoRoot);
-  if (!venvPy) {
-    return {
-      python: null,
-      result: {
-        name: "Virtual env",
-        status: "fail",
-        value: ".venv not found at repo root",
-        fix: "python3 -m venv .venv",
-      },
-    };
-  }
-  const version = pythonVersion(venvPy);
-  return {
-    python: venvPy,
-    result: {
-      name: "Virtual env",
-      status: "ok",
-      value: `.venv/bin/python${version ? ` (Python ${version})` : ""}`,
-    },
-  };
-}
-
-function checkPythonDeps(python: string | null): CheckResult {
-  if (!python) {
-    return {
-      name: "transformers + torch",
+      name: "Whisper (transcription)",
       status: "fail",
-      value: "no Python available to check",
-      fix: "Resolve the Python / venv check above first.",
+      value: "whisper-cli binary missing",
+      fix: "npm run whisper:build   (requires cmake — `brew install cmake` if missing)",
     };
   }
-  const transformers = hasModule(python, "transformers");
-  const torch = hasModule(python, "torch");
-  if (transformers.ok && torch.ok) {
-    return {
-      name: "transformers + torch",
-      status: "ok",
-      value: `transformers ${transformers.version}, torch ${torch.version}`,
-    };
-  }
-  const missing: string[] = [];
-  if (!transformers.ok) missing.push("transformers");
-  if (!torch.ok) missing.push("torch");
+  const modelDir =
+    process.env.FLOWDOC_WHISPER_MODEL_DIR ||
+    path.join(os.homedir(), "Library", "Application Support", "flowdoc", "whisper-model");
+  const modelFile = path.join(modelDir, "kb-whisper-medium-q5_0.bin");
+  const modelReady = fs.existsSync(modelFile) && fs.statSync(modelFile).size > 100_000_000;
   return {
-    name: "transformers + torch",
-    status: "fail",
-    value: `missing: ${missing.join(", ")}`,
-    fix: "source .venv/bin/activate && pip install -r requirements.txt",
+    name: "Whisper (transcription)",
+    status: "ok",
+    value: `whisper-cli ready${modelReady ? ", model cached" : " (model downloads on first transcribe)"}`,
   };
 }
 

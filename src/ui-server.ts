@@ -36,15 +36,35 @@ const streamClients = new Set<http.ServerResponse>();
 let session: Session | null = null;
 let miroTokenOverride: string | null = null;
 
-export async function runUi(repoRoot: string): Promise<void> {
-  const distMain = path.join(repoRoot, "dist", "index.js");
+// appRoot: where the compiled CLI (dist/index.js) lives — inside the read-only app bundle
+// when packaged. dataRoot: where flows are written and served from — a writable location
+// (Electron userData) when packaged. For the plain CLI both are the repo root.
+let appRoot = "";
+let dataRoot = "";
+
+export interface RunningServer {
+  url: string;
+  port: number;
+  close: () => void;
+}
+
+// Start the HTTP+SSE server and return its address. No console output, no auto-open,
+// no signal handlers — the caller (CLI or Electron) owns lifecycle. Used by both the
+// `flowdoc ui` CLI command and the Electron desktop shell.
+export async function startServer(opts: {
+  appRoot: string;
+  dataRoot: string;
+}): Promise<RunningServer> {
+  appRoot = opts.appRoot;
+  dataRoot = opts.dataRoot;
+
+  const distMain = path.join(appRoot, "dist", "index.js");
   if (!fs.existsSync(distMain)) {
-    console.error(`Error: ${distMain} not found. Run \`npm run build\` first.`);
-    process.exit(1);
+    throw new Error(`${distMain} not found. Run \`npm run build\` first.`);
   }
 
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, repoRoot).catch((err) => {
+    handleRequest(req, res).catch((err) => {
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
@@ -56,15 +76,8 @@ export async function runUi(repoRoot: string): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   const url = `http://127.0.0.1:${port}/`;
-  console.log(`\nFlowDoc UI: ${url}\n`);
 
-  try {
-    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-  } catch {
-    // open might not exist (non-macOS) — user can still copy the URL
-  }
-
-  const shutdown = () => {
+  const close = () => {
     if (session && session.exitCode === null) {
       try {
         session.child.kill("SIGINT");
@@ -72,6 +85,30 @@ export async function runUi(repoRoot: string): Promise<void> {
         // ignore
       }
     }
+    server.close();
+  };
+
+  return { url, port, close };
+}
+
+export async function runUi(repoRoot: string): Promise<void> {
+  let server: RunningServer;
+  try {
+    server = await startServer({ appRoot: repoRoot, dataRoot: repoRoot });
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  console.log(`\nFlowDoc UI: ${server.url}\n`);
+
+  try {
+    spawn("open", [server.url], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    // open might not exist (non-macOS) — user can still copy the URL
+  }
+
+  const shutdown = () => {
     server.close();
     process.exit(0);
   };
@@ -82,7 +119,6 @@ export async function runUi(repoRoot: string): Promise<void> {
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  repoRoot: string,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const route = `${req.method} ${url.pathname}`;
@@ -94,12 +130,12 @@ async function handleRequest(
   }
 
   if (req.method === "GET" && url.pathname.startsWith("/flowdocs/")) {
-    await serveFlowFile(url.pathname, repoRoot, res);
+    await serveFlowFile(url.pathname, res);
     return;
   }
 
   if (route === "GET /api/flows") {
-    json(res, listFlows(repoRoot));
+    json(res, listFlows());
     return;
   }
 
@@ -155,7 +191,7 @@ async function handleRequest(
     }
     try {
       const cliArgs = buildCliArgs(command, args);
-      startSession(repoRoot, command, cliArgs);
+      startSession(command, cliArgs);
       json(res, { ok: true });
     } catch (err) {
       res.statusCode = 400;
@@ -232,16 +268,20 @@ function setupSseStream(req: http.IncomingMessage, res: http.ServerResponse): vo
   res.on("close", cleanup);
 }
 
-function startSession(repoRoot: string, command: string, args: string[]): void {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+function startSession(command: string, args: string[]): void {
+  // ELECTRON_RUN_AS_NODE makes process.execPath behave as plain Node. In a packaged
+  // Electron app process.execPath is the Electron binary; without this the child would
+  // launch a second Electron instance instead of running the CLI. Harmless for the
+  // real-Node CLI case (Node ignores the var).
+  const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
   if (miroTokenOverride) env.MIRO_ACCESS_TOKEN = miroTokenOverride;
 
   const child = spawn(
     process.execPath,
-    [path.join(repoRoot, "dist", "index.js"), command, ...args],
+    [path.join(appRoot, "dist", "index.js"), command, ...args],
     {
       env,
-      cwd: repoRoot,
+      cwd: dataRoot,
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
@@ -355,8 +395,8 @@ function buildCliArgs(command: string, args: Record<string, unknown>): string[] 
   }
 }
 
-function listFlows(repoRoot: string): FlowInfo[] {
-  const dir = path.join(repoRoot, "flowdocs");
+function listFlows(): FlowInfo[] {
+  const dir = path.join(dataRoot, "flowdocs");
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const flows: FlowInfo[] = [];
@@ -423,7 +463,6 @@ const MIME: Record<string, string> = {
 
 async function serveFlowFile(
   pathname: string,
-  repoRoot: string,
   res: http.ServerResponse,
 ): Promise<void> {
   const decoded = decodeURIComponent(pathname);
@@ -433,8 +472,8 @@ async function serveFlowFile(
     return;
   }
   const rel = decoded.replace(/^\//, "");
-  const filePath = path.join(repoRoot, rel);
-  const flowdocsRoot = path.join(repoRoot, "flowdocs");
+  const filePath = path.join(dataRoot, rel);
+  const flowdocsRoot = path.join(dataRoot, "flowdocs");
   if (!filePath.startsWith(flowdocsRoot + path.sep) && filePath !== flowdocsRoot) {
     res.statusCode = 403;
     res.end("Forbidden");
