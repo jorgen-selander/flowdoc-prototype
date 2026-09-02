@@ -73,7 +73,8 @@ function styleFor(node: WorkflowNode, isFork: boolean): ShapeStyle {
 }
 
 export async function generateMiro(options: MiroOptions): Promise<string> {
-  const { graph, boardId, accessToken } = options;
+  const { graph, accessToken } = options;
+  const boardId = normalizeBoardId(options.boardId);
 
   if (graph.nodes.length === 0) {
     console.log("No workflow nodes to push.");
@@ -270,6 +271,21 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Accepts either a bare board ID or a pasted board URL:
+//   https://miro.com/app/board/uXjVHrj-48E=/  ->  uXjVHrj-48E=
+// Without this the whole URL ends up percent-encoded into the API path and
+// Miro answers 400 "Ambiguous URI path separator".
+export function normalizeBoardId(input: string): string {
+  const trimmed = input.trim();
+  const fromUrl = trimmed.match(/\/board\/([^/?#]+)/);
+  const id = fromUrl ? fromUrl[1] : trimmed.replace(/\/+$/, "");
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
 }
 
 function boardUrl(boardId: string): string {

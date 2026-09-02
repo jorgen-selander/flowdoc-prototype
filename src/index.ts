@@ -63,7 +63,7 @@ program
     collect,
     [],
   )
-  .requiredOption("--board <board-id>", "Miro board ID")
+  .requiredOption("--board <board-id>", "Miro board ID or board URL")
   .action(async (opts) => {
     const token = process.env.MIRO_ACCESS_TOKEN;
     if (!token) {
