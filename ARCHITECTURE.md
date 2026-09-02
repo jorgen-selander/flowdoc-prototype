@@ -81,15 +81,17 @@ Design choices worth flagging:
 - **Dark mode via `prefers-color-scheme`.** No toggle, no JS to manage state — CSS custom properties switch automatically with the OS.
 - **Auto-regenerated.** Both `flowdoc capture` and `flowdoc transcribe` call `generateSite()` at the end, so the site is always fresh. `flowdoc site <folder>` exists for explicit regen.
 
-## Transcription (`src/transcribe.ts` + `scripts/transcribe.py`)
+## Transcription (`src/transcribe.ts`)
 
 `flowdoc transcribe <flow-folder>` walks each step's `narration.audioPath` and writes a Swedish text transcript into `narration.transcript`. Everything runs locally — no audio leaves the machine.
 
-The architecture is a long-lived Python subprocess plus a thin Node wrapper:
+v1.0.4 replaced the original Python + `transformers` + torch stack with whisper.cpp. That removed `scripts/transcribe.py`, `src/python.ts`, `requirements.txt`, the venv, and a ~700 MB dependency install — and it is what makes the desktop app shippable to people who don't have a Python toolchain.
 
-- **Python worker (`scripts/transcribe.py`).** Loads `KBLab/kb-whisper-large` via the `transformers` `automatic-speech-recognition` pipeline once at startup (3 GB model, cached in `~/.cache/huggingface/`). Reads one audio path per line on stdin, writes one JSON object per line on stdout. The first line is `{"ready": true}` so the Node side knows when it can start sending paths. Each subsequent line is either `{"path": "...", "text": "..."}` or `{"path": "...", "error": "..."}`.
+- **Model.** `kb-whisper-medium-q5_0.bin` — KBLab's Swedish-tuned medium, 5-bit quantized, ~510 MB. Not bundled in the app: it downloads on first transcribe into `FLOWDOC_WHISPER_MODEL_DIR` (Electron userData, or `~/Library/Application Support/flowdoc/whisper-model` for the CLI — the same path deliberately, so both share one cache). Keeps updates small and survives auto-updates.
 
-- **Node wrapper (`src/transcribe.ts`).** Spawns `python3 scripts/transcribe.py`, parses line-delimited JSON, manages a small in-memory queue so requests are processed sequentially (the model isn't parallel-safe). Exposes `transcribe(path) → Promise<string>`. Persists `workflow-steps.json` after each successful transcription, so Ctrl+C mid-run loses nothing already done.
+- **Per-step pipeline (`src/transcribe.ts`).** For each step: convert the `.webm` slice to 16 kHz mono PCM WAV with ffmpeg (what whisper.cpp expects), spawn `whisper-cli -m <model> -f <wav> -l sv -nt -np`, collect stdout. Temp WAVs are cleaned up afterwards. `workflow-steps.json` is persisted after each successful transcription, so Ctrl+C mid-run loses nothing already done.
+
+- **Binary resolution.** `FLOWDOC_WHISPER_BIN` if set (the Electron shell sets it), otherwise `node_modules/nodejs-whisper/cpp/whisper.cpp/build/bin/whisper-cli` relative to `dist/`. Same env-var-with-fallback pattern as ffmpeg and Chromium.
 
 - **Idempotency.** When a transcript is written, `narration.audioMtime` is set to `<mtimeMs>:<size>` of the audio file. On re-run, steps whose audio fingerprint matches the stored value are skipped. Re-record one step → only that one re-transcribes. Cheap, file-system-only, no hashing.
 
@@ -174,10 +176,8 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | `src/ui-page.ts` | Single-page UI as one HTML string: card per subcommand, sticky log pane |
 | `src/recorder.ts` | The injected browser script + the Node-side event handler that turns events into `RecordedStep`s |
 | `src/audio.ts` | ffmpeg subprocess wrapper: mic detection, recording, per-step slicing |
-| `src/transcribe.ts` | Python subprocess wrapper for KBLab whisper transcription |
-| `src/python.ts` | Shared Python resolution: `preferredPython` (venv first, then PATH), `hasModule` for dep checks |
+| `src/transcribe.ts` | whisper.cpp transcription: model download, WAV conversion, `whisper-cli` invocation |
 | `src/doctor.ts` | `flowdoc doctor` — environment diagnostics, diagnose-only with copy-pasteable fix commands |
-| `scripts/transcribe.py` | Long-lived Python worker that loads the whisper model and reads/writes JSON lines |
 | `src/postprocess.ts` | 4-pass pipeline: `RecordedStep[]` → `WorkflowStep[]` |
 | `src/markdown.ts` | Renders `README.md` from steps (including 🎧 audio links when narration is present) |
 | `src/site.ts` | Renders the self-contained `index.html` documentation site (TOC, inline audio, lightbox) |
@@ -187,3 +187,4 @@ No agents, no AI calls in the capture path. The whole thing is deterministic: sa
 | `src/miro.ts` | Pushes a `WorkflowGraph` to Miro via REST v2 |
 | `src/screenshot.ts` | Wraps `page.screenshot()` + ensures the output dir exists |
 | `src/types.ts` | Shared TypeScript interfaces |
+| `electron/main.js` | Desktop shell: boots `ui-server` in-process, injects bundled binary paths, safeStorage-backed token store, auto-update dialog |

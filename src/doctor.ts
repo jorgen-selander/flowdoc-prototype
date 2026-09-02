@@ -201,6 +201,10 @@ function checkMiroToken(): CheckResult {
     name: "MIRO_ACCESS_TOKEN",
     status: "warn",
     value: "not set — required only for `flowdoc miro`",
-    fix: "export MIRO_ACCESS_TOKEN='<your-token>'\n(Get one at https://miro.com/app/settings/user-profile/apps → Create new app → Install on team)",
+    fix:
+      "export MIRO_ACCESS_TOKEN='<your-token>'\n" +
+      "(Tokens belong to an app, and apps need a Developer team first:\n" +
+      " https://miro.com/app/dashboard/?createDevTeam=1 → create app →\n" +
+      " Permissions: boards:read + boards:write → Install app and get OAuth token)",
   };
 }

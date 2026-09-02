@@ -23,7 +23,7 @@ FlowDoc has six subcommands:
 - `flowdoc transcribe` — transcribe per-step audio to text using KBLab whisper (Swedish, local)
 - `flowdoc site` — (re)generate a self-contained HTML documentation site for a flow
 - `flowdoc miro` — push a captured flow to a Miro board
-- `flowdoc doctor` — check that the local environment is set up (Node, ffmpeg, Python, venv, etc.)
+- `flowdoc doctor` — check that the local environment is set up (Node, ffmpeg, mic, whisper, etc.)
 - `flowdoc ui` — open a minimal local web UI in the browser to trigger all the commands above
 
 ### `flowdoc capture`
@@ -80,7 +80,7 @@ flowdocs/my-flow/
 
 ### `flowdoc transcribe`
 
-Transcribe the audio recorded by `flowdoc capture` to text using `KBLab/kb-whisper-large` running locally via the `transformers` library. Audio never leaves your machine.
+Transcribe the audio recorded by `flowdoc capture` to text using KB-Whisper (Swedish-tuned) running locally via whisper.cpp. Audio never leaves your machine.
 
 ```bash
 npx flowdoc transcribe flowdocs/<flow-name>
@@ -92,19 +92,13 @@ npx flowdoc transcribe flowdocs/<flow-name>
 
 #### Setup (one time)
 
-You need Python 3 and the `transformers` + `torch` libraries. The recommended path is an isolated virtualenv at the project root:
+Nothing to install. `npm install` compiles whisper.cpp as part of `postinstall` (cmake is the only system dependency), and the packaged desktop app ships the binary.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-The first transcription downloads the KBLab model (~3 GB) into `~/.cache/huggingface/`. Subsequent runs start in a few seconds.
+The first transcription downloads the model — `kb-whisper-medium-q5_0.bin`, ~510 MB — into `~/Library/Application Support/flowdoc/whisper-model/`. It prints live speed and ETA while it does. Subsequent runs start immediately. The desktop app uses the same cache directory, so a model fetched by either path serves both.
 
 #### What it does
 
-- Walks each step's `narration.audioPath`, sends it to a long-lived Python subprocess running the model, writes the result into `narration.transcript`.
+- Walks each step's `narration.audioPath`, converts the `.webm` slice to 16 kHz mono WAV with ffmpeg, runs `whisper-cli` against it, writes the result into `narration.transcript`.
 - **Idempotent.** Each successful transcription stores the audio file's `<mtime>:<size>` in `narration.audioMtime`. On re-run, steps whose fingerprint matches are skipped. Re-record one step in a fresh capture run → only that one re-transcribes.
 - Regenerates `README.md` with the transcripts as blockquotes above the 🎧 audio links.
 - The next `flowdoc miro` run automatically surfaces each transcript as a second italic line under the shape title on the board.
@@ -132,7 +126,7 @@ What the site has:
 
 ### `flowdoc doctor`
 
-Print a status checklist of the local environment — Node, build output, ffmpeg, system mic, Python, virtual env, transformers + torch, Playwright Chromium, MIRO token. Diagnose only — never installs anything. Exit 0 if no failures, 1 otherwise.
+Print a status checklist of the local environment — Node, build output, ffmpeg, system mic, whisper, Playwright Chromium, MIRO token. Diagnose only — never installs anything. Exit 0 if no failures, 1 otherwise. The MIRO token row is omitted inside the desktop app, which sets the token through its own field.
 
 ```bash
 node dist/index.js doctor
@@ -181,9 +175,23 @@ npx flowdoc miro --from flowdocs/<main-flow> [--branch flowdocs/<other-flow>]...
 |---|---|---|
 | `--from <flow-folder>` | Yes | Main flow folder containing `workflow-steps.json` |
 | `--branch <flow-folder>` | No | Alternative branch flow folder. Repeatable — pass `--branch` multiple times to add multiple branches. |
-| `--board <board-id>` | Yes | Miro board ID (the part between `/board/` and `/` in the board URL) |
+| `--board <board-id>` | Yes | Miro board ID or a full board URL — `https://miro.com/app/board/uXjVHOPXDss=/` and `uXjVHOPXDss=` both work |
 
-The command also reads `MIRO_ACCESS_TOKEN` from the environment. Generate one in Miro under **Profile → Your apps → Create new app → Install on this team** (developer mode), then copy the token. Treat it like a password — the project's `.gitignore` blocks `.env` files so a local `.env` is a safe place to keep it.
+The command also reads `MIRO_ACCESS_TOKEN` from the environment — see [Getting a Miro token](#getting-a-miro-token) below. Treat it like a password; the project's `.gitignore` blocks `.env` files so a local `.env` is a safe place to keep it. In the desktop app you paste the token into the Miro card instead, and it is remembered between launches (encrypted via the macOS Keychain).
+
+#### Getting a Miro token
+
+Miro has no standalone API key — every token belongs to an app, and an app has to live in a **Developer team**. If **Profile settings → Your apps** shows no "Create new app" button, you don't have one yet; that's the missing step, not a permissions problem.
+
+1. Create a Developer team: <https://miro.com/app/dashboard/?createDevTeam=1> → accept terms → **Create team**. It's free and separate from your normal team.
+2. Name the app in the modal that follows → **Create app**.
+3. On the app page, under **Permissions**, tick `boards:read` and `boards:write`.
+4. **Install app and get OAuth token** → choose the team whose boards you'll write to → authorize.
+5. Copy the token.
+
+If an app already exists in **Your apps**, skip to step 3 — the same **Install app and get OAuth token** button is there.
+
+The board ID is the segment between `/board/` and the next `/` in a board URL, but `--board` accepts the whole URL, so pasting it directly is fine.
 
 Each run prints the IDs of every created shape and connector and the board URL at the end. Re-running creates a fresh set of shapes; existing items on the board are never touched or deleted.
 

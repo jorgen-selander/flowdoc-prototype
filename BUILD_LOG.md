@@ -664,6 +664,50 @@ This was also the first time we set our own `Menu.setApplicationMenu`, which mea
 
 ---
 
+## Session 16: Return after three months (v1.0.9 → v1.0.10)
+
+**Time:** 2026-09-02, ~1.5 hours
+**Commits:** `c788c3a` … `1f03347`
+
+The first session after a three-month gap, and the shape of it was set by that gap: almost every problem was a *stale-knowledge* problem rather than an engineering one.
+
+### The Miro token detour
+
+Started with "how do I get a Miro API key" and lost close to an hour to bad assumptions before writing any code:
+
+- Miro has no standalone API key. Every token belongs to an app, and every app lives in a **Developer team**. `Profile settings → Your apps` shows no "Create new app" button until that team exists — which reads as a permissions problem and isn't one. The direct link is `https://miro.com/app/dashboard/?createDevTeam=1`.
+- The team-admin `Apps & Integrations` page is a different thing entirely — it lists apps installed on the team and only offers "Remove for team". No tokens there.
+- Worth knowing for later: tokens from the OAuth flow last 60 minutes with a 60-day refresh token. The install-button token has historically been long-lived. It's an app-level setting, so decide it deliberately.
+
+`ONBOARDING.md` and `src/doctor.ts` both gave the incomplete "Create new app → Install on team" instruction. Both now name the Developer team step.
+
+### The bug that started it
+
+Pasting a board URL into `--board` (or the app's Board ID field) sent the whole URL percent-encoded into the API path: `400 Ambiguous URI path separator`. `normalizeBoardId()` now strips the URL wrapper, trailing slashes, query params, and `%3D`-style encoding. Bare IDs pass through untouched.
+
+Then the fixed build didn't fix anything, because the packaged app carries its own copy of `dist/` inside the bundle — the June build was still running. Obvious in hindsight, invisible in the moment.
+
+### Docs as a failure mode
+
+`CLAUDE.md` still described the Python/torch transcription stack that v1.0.4 deleted three months earlier: `scripts/transcribe.py`, `src/python.ts`, `requirements.txt`, venv auto-detection. Since that file is what briefs a fresh session, the stale version actively produced venv-flavoured advice for a project with no Python in it.
+
+That's the lesson worth keeping: **a stale `CLAUDE.md` is worse than no `CLAUDE.md`**, because it is trusted. The same rot had spread to `README.md`, `ONBOARDING.md`, `QUICKSTART.md`, and `ARCHITECTURE.md` — all four still walked new users through `pip install -r requirements.txt`. All five files now match the code.
+
+### Two real fixes
+
+- **The Miro token didn't survive a restart.** It lived only in `ui-server`'s module scope, so quitting — or taking an auto-update — lost it, and the desktop app has no env-var fallback since v1.0.6 hid that check. `startServer` now takes an optional `secretStore`; the Electron shell supplies one backed by `safeStorage`, encrypting against a macOS Keychain key. If encryption is unavailable it declines to write rather than putting a bearer token on disk in plaintext. The plain CLI passes no store and keeps the in-memory behaviour.
+- **The app icon rendered as a hard-edged white square.** The artwork *depicted* a rounded tile, but the PNG was opaque — `sips -g hasAlpha` said `no` — and **macOS does not mask app icons**. The tile and the background behind it were both near-white, so only a faint drop shadow suggested a rounded edge; on a dark desktop it vanished. Rebuilt on Apple's grid: an 824×824 superellipse body in a 1024 canvas with a 100 px transparent margin.
+
+  First attempt looked dirty. Cropping the original tile and masking it dragged the baked drop shadow inside the new border, because an n=5 squircle is *fuller* at the corners than the source's rounded rect — the mask kept pixels that had been outside the original shape. Fix: fill the body flat, composite only the logo. Also committed `build/icon.png`, the 1024 master, which didn't exist in the repo and had to be reverse-engineered out of the `.icns`.
+
+### What surprised me
+
+- **Three months is long enough to lose the whole mental model.** Not the concepts — the specifics. Which stack transcription uses, where the token lives, whether the app runs the repo's `dist/`. `BUILD_LOG.md` and `git log` reconstructed it in about five minutes, which is the strongest argument yet for keeping both.
+- **Documentation rot has a compounding cost with an AI collaborator.** A human skims a stale README and notices it doesn't match. A fresh session takes it as ground truth and confidently acts on it. The doc *is* the interface.
+- **macOS icon corners are not automatic.** Every rounded app icon in the Dock ships its corners baked into the artwork with real transparency. Easy to assume the OS handles it; it doesn't.
+
+---
+
 ## Summary
 
 | Version | What | Key Change |
@@ -695,6 +739,8 @@ This was also the first time we set our own `Menu.setApplicationMenu`, which mea
 | v1.0.6 | `b675b0c` | Hide `MIRO_ACCESS_TOKEN` env-var warning in the packaged app (CLI still shows it) |
 | v1.0.7 | `4986c2b` | Swap whisper model to KB-Whisper-medium Q5_0 (Swedish-tuned) + auto-cleanup of stale models |
 | v1.0.8 | `f9f759e` | Download UX: live speed + ETA + alternating onboarding tip / zen koan during the ~500 MB first-run download |
+| v1.0.9 | `c788c3a` | `--board` accepts a pasted board URL; `CLAUDE.md` refreshed against the post-v1.0.4 codebase |
+| v1.0.10 | `599f262`, `ccce8b1` | Miro token persisted via `safeStorage`; app icon rebuilt as a real squircle with transparency |
 
 **Total time:**
 - **v0.1 → v0.10**: ~7.5 hours from empty repo to a narrated-workflow CLI with local Swedish transcription, Miro export, and a self-contained HTML site.

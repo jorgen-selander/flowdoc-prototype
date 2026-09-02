@@ -8,21 +8,19 @@ npm install
 npm run build
 
 # System deps
-brew install ffmpeg
-
-# Python env for transcription
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+brew install ffmpeg cmake      # cmake compiles whisper.cpp during npm install
 ```
+
+Or skip all of it and use the desktop app — it bundles ffmpeg, Chromium, and whisper.
 
 ## Per session (every new terminal)
 
 ```bash
 cd /Users/jorgenselander/Projects/flowdoc-prototype
-source .venv/bin/activate                 # so transcribe finds transformers + torch
 export MIRO_ACCESS_TOKEN='<your-miro-token>'   # only if you'll push to Miro
 ```
+
+Nothing else per session. In the desktop app the Miro token is pasted once in the UI and remembered across launches.
 
 ## Verify your environment
 
@@ -30,7 +28,7 @@ export MIRO_ACCESS_TOKEN='<your-miro-token>'   # only if you'll push to Miro
 node dist/index.js doctor
 ```
 
-Prints a 9-row checklist (Node, build, ffmpeg, mic, Python, venv, transformers, Playwright, MIRO token). Green = ready; red = the command to fix it is printed below the row.
+Prints a 7-row checklist (Node, build, ffmpeg, mic, whisper, Playwright, MIRO token). Green = ready; red = the command to fix it is printed below the row.
 
 ## Easiest path: the local web UI
 
@@ -70,7 +68,7 @@ node dist/index.js capture --url <url> --name <name> --no-audio   # skip audio e
 node dist/index.js transcribe flowdocs/<flow-name>
 ```
 
-Runs `KBLab/kb-whisper-large` against each step's `.webm` slice. First run downloads the model (~3 GB, cached after that). Idempotent — re-running only re-transcribes steps whose audio has changed.
+Runs KB-Whisper (Swedish-tuned, via whisper.cpp) against each step's `.webm` slice. First run downloads the model (~510 MB, cached after that). Idempotent — re-running only re-transcribes steps whose audio has changed.
 
 ### 3. View the result
 
@@ -83,10 +81,10 @@ Self-contained HTML site with sticky TOC, inline `<audio controls>` per step, li
 ### 4. Push to Miro
 
 ```bash
-node dist/index.js miro --from flowdocs/<flow-name> --board "<board-id>"
+node dist/index.js miro --from flowdocs/<flow-name> --board "<board-id-or-url>"
 ```
 
-Pushes branded shapes (yellow start circle, light-blue page rectangles, blue user-action rectangles, green diamond at any fork) with the transcript as a second line under each title.
+`--board` takes either the bare ID or a pasted board URL. Pushes branded shapes (yellow start circle, light-blue page rectangles, blue user-action rectangles, green diamond at any fork) with the transcript as a second line under each title.
 
 ## Useful extras
 
