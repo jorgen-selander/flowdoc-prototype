@@ -150,11 +150,11 @@ export const UI_HTML = `<!doctype html>
       <p class="hint">Push a flow to a Miro board. Add branches to fork the layout.</p>
       <div class="row"><label for="miro-flow">Main flow</label><select id="miro-flow"></select></div>
       <div class="row"><label for="miro-branches">Branches</label><select id="miro-branches" multiple></select></div>
-      <div class="row"><label for="miro-board">Board ID</label><input id="miro-board" type="text" placeholder="uXjVHOPXDss="></div>
+      <div class="row"><label for="miro-board">Board ID</label><input id="miro-board" type="text" placeholder="uXjVHOPXDss= or board URL"></div>
       <div class="row"><label></label>
         <div class="token-row">
           <span id="miro-token-state">token: …</span>
-          <input id="miro-token-input" type="password" placeholder="override (in-memory only)">
+          <input id="miro-token-input" type="password" placeholder="paste Miro token">
           <button id="miro-token-set">Set</button>
         </div>
       </div>

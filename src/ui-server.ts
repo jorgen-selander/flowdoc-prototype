@@ -30,11 +30,22 @@ interface FlowInfo {
 }
 
 const OUTPUT_CAP = 5000;
+const MIRO_TOKEN_KEY = "miroAccessToken";
 const ALLOWED_COMMANDS = new Set(["capture", "transcribe", "site", "miro", "doctor"]);
 
 const streamClients = new Set<http.ServerResponse>();
 let session: Session | null = null;
 let miroTokenOverride: string | null = null;
+
+// Optional persistence for the Miro token. The Electron shell supplies a store
+// backed by safeStorage (encrypted against a Keychain key); the plain CLI passes
+// nothing and keeps the old in-memory behaviour, since CLI users have the env var.
+export interface SecretStore {
+  get(key: string): string | null;
+  set(key: string, value: string | null): void;
+}
+
+let secretStore: SecretStore | null = null;
 
 // appRoot: where the compiled CLI (dist/index.js) lives — inside the read-only app bundle
 // when packaged. dataRoot: where flows are written and served from — a writable location
@@ -54,9 +65,12 @@ export interface RunningServer {
 export async function startServer(opts: {
   appRoot: string;
   dataRoot: string;
+  secretStore?: SecretStore;
 }): Promise<RunningServer> {
   appRoot = opts.appRoot;
   dataRoot = opts.dataRoot;
+  secretStore = opts.secretStore ?? null;
+  miroTokenOverride = secretStore?.get(MIRO_TOKEN_KEY) ?? null;
 
   const distMain = path.join(appRoot, "dist", "index.js");
   if (!fs.existsSync(distMain)) {
@@ -234,6 +248,7 @@ async function handleRequest(
       return;
     }
     miroTokenOverride = parsed.token && parsed.token.length > 0 ? parsed.token : null;
+    secretStore?.set(MIRO_TOKEN_KEY, miroTokenOverride);
     json(res, { ok: true, miroTokenSet: hasMiroToken() });
     return;
   }

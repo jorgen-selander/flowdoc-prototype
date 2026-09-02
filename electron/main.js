@@ -76,6 +76,7 @@ async function boot() {
   server = await startServer({
     appRoot,
     dataRoot: app.getPath("userData"),
+    secretStore: createSecretStore(),
   });
 
   createWindow();
@@ -84,6 +85,56 @@ async function boot() {
   if (app.isPackaged) {
     setupAutoUpdate();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Secret storage
+//
+// The Miro token used to live only in ui-server's module scope, so quitting the
+// app (or taking an update) lost it and the user had to re-paste every launch.
+// safeStorage encrypts against a key held in the macOS Keychain; only ciphertext
+// touches disk. If encryption is unavailable we decline to persist rather than
+// writing a bearer token in plaintext — that degrades to the old behaviour.
+// ---------------------------------------------------------------------------
+
+function createSecretStore() {
+  const { safeStorage } = require("electron");
+  const file = path.join(app.getPath("userData"), "secrets.json");
+
+  const readAll = () => {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return {};
+    }
+  };
+
+  return {
+    get(key) {
+      const stored = readAll()[key];
+      if (!stored || !safeStorage.isEncryptionAvailable()) return null;
+      try {
+        return safeStorage.decryptString(Buffer.from(stored, "base64"));
+      } catch {
+        // Keychain entry rotated or the blob is from another machine.
+        return null;
+      }
+    },
+    set(key, value) {
+      const all = readAll();
+      if (value === null) {
+        delete all[key];
+      } else {
+        if (!safeStorage.isEncryptionAvailable()) return;
+        all[key] = safeStorage.encryptString(value).toString("base64");
+      }
+      try {
+        fs.writeFileSync(file, JSON.stringify(all), { mode: 0o600 });
+      } catch (err) {
+        console.error("Could not persist secrets:", err.message);
+      }
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
