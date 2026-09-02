@@ -51,6 +51,8 @@ electron/
   main.js           — Desktop shell: boots ui-server in-process, points a BrowserWindow at it, injects bundled ffmpeg/Chromium/whisper paths as env vars, native auto-update dialog + menu
 build/
   entitlements.mac.plist — Hardened-runtime entitlements (mic access) for signing
+  icon.icns              — App icon consumed by electron-builder (mac default path)
+  icon.png               — 1024x1024 master the .icns is generated from; keep in sync
 .github/workflows/
   release.yml       — Tag `v*` → build, sign, notarize, publish to GitHub Releases
 .env.example        — Template listing the env vars FlowDoc consumes (MIRO_ACCESS_TOKEN). `.env` itself stays gitignored.
@@ -83,5 +85,6 @@ build/
 - `ui-server.ts` is a thin HTTP+SSE wrapper that spawns the same CLI subcommands as children. It takes two roots: `appRoot` (where `dist/index.js` lives — read-only inside the .app when packaged) and `dataRoot` (where flows are written and served from — the repo in dev, userData in the app). Never assume they're the same directory. Single-session model (one subcommand at a time). The output buffer is replayed to new SSE clients so a refresh during a long capture doesn't lose context. `MIRO_ACCESS_TOKEN` can be set from the UI. Persistence is injected, not assumed: `startServer` takes an optional `secretStore` (`get`/`set`), and the Electron shell supplies one backed by `safeStorage` — encrypted against a macOS Keychain key, ciphertext only in `userData/secrets.json` (mode 600). Without a store (plain `flowdoc ui`) the token stays in memory, which is fine because CLI users have the env var. If `safeStorage.isEncryptionAvailable()` is false the store declines to write rather than putting a bearer token on disk in plaintext. Strip ANSI escapes from subprocess stdout/stderr before streaming so colored doctor output reads cleanly in the log pane.
 - The packaged app carries its own copy of `dist/` inside the bundle. Rebuilding the repo does **not** update an installed `/Applications/FlowDoc.app` — use `npm run app` to test changes, `npm run dist` to repackage.
 - Releases are tag-driven: push a `v*` tag and `.github/workflows/release.yml` builds, signs, notarizes, and publishes to GitHub Releases. `mac.target` must include both `dmg` and `zip` — electron-updater needs the zip to apply in-place updates, and omitting it makes auto-update fail silently.
+- The app icon must ship its own rounded shape — macOS does not mask icons. `build/icon.png` is the 1024 master on Apple's grid: an 824x824 squircle body centred in a 1024 canvas with a 100 px fully transparent margin, alpha included. Regenerate the `.icns` with `iconutil -c icns <iconset>` after any edit, and check `sips -g hasAlpha` says `yes` — an opaque PNG renders as a hard-edged square in the Dock regardless of what the artwork depicts.
 - Debug Electron issues by running from a terminal and reading stdout. The GUI surfaces nothing and macOS unified log does not capture Electron stdout.
 - Secrets policy: `.gitignore` blocks `.env`, `*.pem`, `*.key`, `secrets/` — keep tokens out of tracked files
